@@ -101,6 +101,27 @@ class HotspotRankingTests(unittest.TestCase):
         self.assertEqual(client.fetch_args, (["rb2610"], "day", 2))
         self.assertEqual(result["code"].tolist(), ["rb2610"])
 
+    def test_excludes_contracts_without_a_bar_for_current_market_trade_date(self):
+        metadata = [
+            {"code": "rb2610", "name": "螺纹钢", "exchange_code": "SHFE"},
+            {"code": "jd2608", "name": "鸡蛋", "exchange_code": "DCE"},
+        ]
+
+        def bars(dates):
+            return pd.DataFrame({
+                "datetime": pd.to_datetime(dates), "close": [100, 101],
+                "volume": [100, 200], "money": [1_000_000, 2_000_000],
+                "open_interest": [1000, 1100],
+            })
+
+        result = hotspot_radar.build_hotspot_ranking(metadata, {
+            "rb2610": bars(["2026-07-14", "2026-07-15"]),
+            "jd2608": bars(["2026-07-13", "2026-07-14"]),
+        })
+
+        self.assertEqual(result["code"].tolist(), ["rb2610"])
+        self.assertEqual(result["trade_date"].unique().tolist(), ["2026-07-15"])
+
 
 if __name__ == "__main__":
     unittest.main()

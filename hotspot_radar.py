@@ -44,11 +44,21 @@ def generate_hotspot_radar(client):
 def build_hotspot_ranking(metadata, frames):
     """Rank current trading-day turnover and classify price/OI quadrants."""
     by_code = {item["code"]: item for item in metadata}
+    latest_dates = [
+        pd.Timestamp(frame.iloc[-1]["datetime"]).date()
+        for code, frame in frames.items()
+        if code in by_code and frame is not None and not frame.empty
+    ]
+    if not latest_dates:
+        return pd.DataFrame()
+    market_trade_date = max(latest_dates)
     rows = []
     for code, frame in frames.items():
         if frame is None or len(frame) < 2 or code not in by_code:
             continue
         previous, current = frame.iloc[-2], frame.iloc[-1]
+        if pd.Timestamp(current["datetime"]).date() != market_trade_date:
+            continue
         previous_close = float(previous["close"])
         close = float(current["close"])
         if previous_close <= 0:

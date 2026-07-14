@@ -32,19 +32,34 @@ def build_display_table(result: pd.DataFrame) -> pd.DataFrame:
         "小时线截止": pd.to_datetime(result["bar_time"]).dt.strftime("%m-%d %H:%M"),
         "近20小时量": result["recent_volume"],
         "持仓量": result["open_interest"],
-        "MA状态": [
+        "期权MA": [
             _signal_label(bullish, bars)
             for bullish, bars in zip(
                 result["ma_bullish"], result["ma_cross_bars_ago"]
             )
         ],
-        "MACD状态": [
+        "期权MACD": [
             _signal_label(bullish, bars)
             for bullish, bars in zip(
                 result["macd_bullish"], result["macd_cross_bars_ago"]
             )
         ],
-        "信号分": result["signal_score"],
+        "标的MA": [
+            _signal_label(bullish, bars)
+            for bullish, bars in zip(
+                result["underlying_ma_bullish"],
+                result["underlying_ma_cross_bars_ago"],
+            )
+        ],
+        "标的MACD": [
+            _signal_label(bullish, bars)
+            for bullish, bars in zip(
+                result["underlying_macd_bullish"],
+                result["underlying_macd_cross_bars_ago"],
+            )
+        ],
+        "双确认": result["double_confirmed"].map({True: "是", False: "否"}),
+        "确认分": result["confirmation_score"],
     })
     for column in ("最新价", "近20小时量", "持仓量"):
         display[column] = pd.to_numeric(display[column], errors="coerce").round(2)
@@ -54,7 +69,12 @@ def build_display_table(result: pd.DataFrame) -> pd.DataFrame:
 def filter_signal_mode(result: pd.DataFrame, mode: str) -> pd.DataFrame:
     if result.empty or mode == "all":
         return result
-    if mode == "recent":
+    if mode == "double":
+        recent = result["ma_cross_bars_ago"].notna() | result[
+            "macd_cross_bars_ago"
+        ].notna()
+        mask = result["double_confirmed"] & recent
+    elif mode == "recent":
         mask = result["ma_cross_bars_ago"].notna() | result[
             "macd_cross_bars_ago"
         ].notna()
@@ -69,8 +89,11 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description="扫描1至14天到期、平值附近且流动性合格的商品期权小时金叉"
     )
-    parser.add_argument("--mode", choices=("recent", "bullish", "all"),
-                        default="recent", help="recent=近3根金叉，bullish=多头，all=全部")
+    parser.add_argument(
+        "--mode", choices=("double", "recent", "bullish", "all"),
+        default="double",
+        help="double=期权与标的方向双确认，recent=近3根金叉，bullish=多头，all=全部",
+    )
     parser.add_argument("--top", type=int, default=30)
     parser.add_argument("--min-dte", type=int, default=1)
     parser.add_argument("--max-dte", type=int, default=15,

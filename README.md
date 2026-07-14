@@ -35,23 +35,24 @@ export QUOTE_API_KEY='你的 Access Key'
 
 ## 临期期权小时金叉扫描
 
-默认筛选自然日到期天数 `1 <= DTE < 15`、平值附近、近20根小时K线成交与持仓合格的商品期权，并计算 MA5/MA20 与 MACD(12,26,9)。API 的小时K线时间戳按结束时间处理，尚未结束的小时线不会参与信号。
+默认筛选自然日到期天数 `1 <= DTE < 15`、平值附近、近20根小时K线成交与持仓合格的商品期权，并同时计算期权及标的期货的 MA5/MA20 与 MACD(12,26,9)。看涨期权要求标的处于多头方向，看跌期权要求标的处于空头方向。API 的小时K线时间戳按结束时间处理，尚未结束的小时线不会参与信号。
 
 ```bash
 export QUOTE_API_KEY='你的 Access Key'
-.venv/bin/python option_cli.py --mode recent --top 30
+.venv/bin/python option_cli.py --mode double --top 30
 ```
 
 模式：
 
-- `recent`：MA或MACD在最近3根完整小时线内金叉（默认）
+- `double`：期权最近3根完整小时线内出现金叉，且与标的期货方向一致（默认）
+- `recent`：期权MA或MACD在最近3根完整小时线内金叉
 - `bullish`：MA或MACD当前处于多头状态
 - `all`：显示所有通过流动性筛选的近平值期权
 
 导出CSV：
 
 ```bash
-.venv/bin/python option_cli.py --mode recent --csv output/options_latest.csv
+.venv/bin/python option_cli.py --mode double --csv output/options_latest.csv
 ```
 
 可用 `--strikes` 控制每个标的每个购沽方向保留的近平值档数，使用 `--min-volume`、`--min-open-interest` 调整流动性门槛。

@@ -71,6 +71,30 @@ def assess_liquidity(
     }
 
 
+def direction_confirmation(option_type, option_signal, underlying_signal):
+    """Confirm rising option premium against the directional underlying trend."""
+    is_call = option_type == "CALL"
+
+    def aligned(indicator):
+        option_bullish = option_signal.get(f"{indicator}_bullish")
+        underlying_bullish = underlying_signal.get(f"{indicator}_bullish")
+        if option_bullish is None or underlying_bullish is None:
+            return False
+        underlying_aligned = (
+            bool(underlying_bullish) if is_call else not bool(underlying_bullish)
+        )
+        return bool(option_bullish) and underlying_aligned
+
+    ma_confirmed = aligned("ma")
+    macd_confirmed = aligned("macd")
+    return {
+        "ma_direction_confirmed": ma_confirmed,
+        "macd_direction_confirmed": macd_confirmed,
+        "double_confirmed": ma_confirmed or macd_confirmed,
+        "direction_confirmation_count": int(ma_confirmed) + int(macd_confirmed),
+    }
+
+
 def analyze_hourly_signal(
     frame, ma_fast=5, ma_slow=20, macd_fast=12, macd_slow=26,
     macd_signal=9, cross_lookback=3,
@@ -185,15 +209,29 @@ def scan_near_expiry_options(
     if not candidates:
         return pd.DataFrame()
 
+    signal_required_bars = max(ma_slow + 1, macd_slow + macd_signal)
+    required_bars = max(signal_required_bars, liquidity_lookback)
     underlying_codes = sorted({item["options_target_code"] for item in candidates})
     underlying_frames = client.get_klines_by_count(
-        underlying_codes, interval="1h", count=2
+        underlying_codes, interval="1h", count=kline_count
     )
     underlying_prices = {}
+    underlying_signals = {}
+    underlying_signal_values = {}
     for code, frame in underlying_frames.items():
         complete = closed_hour_bars(frame, now=now)
         if complete is not None and not complete.empty:
             underlying_prices[code] = float(complete["close"].iloc[-1])
+        if complete is not None and len(complete) >= signal_required_bars:
+            signal = analyze_hourly_signal(
+                complete, ma_fast=ma_fast, ma_slow=ma_slow,
+                macd_fast=macd_fast, macd_slow=macd_slow,
+                macd_signal=macd_signal, cross_lookback=cross_lookback,
+            )
+            underlying_signal_values[code] = signal
+            underlying_signals[code] = {
+                f"underlying_{key}": value for key, value in signal.items()
+            } | {"underlying_bar_time": complete["datetime"].iloc[-1]}
     candidates = select_nearest_strikes(
         candidates, underlying_prices, strikes_per_side=strikes_per_side,
         max_moneyness=max_moneyness,
@@ -202,7 +240,6 @@ def scan_near_expiry_options(
         return pd.DataFrame()
     codes = [item["code"] for item in candidates]
     frames = client.get_klines_by_count(codes, interval="1h", count=kline_count)
-    required_bars = max(ma_slow + 1, macd_slow + macd_signal, liquidity_lookback)
     rows = []
     for item in candidates:
         bars = closed_hour_bars(frames.get(item["code"], pd.DataFrame()), now=now)
@@ -225,6 +262,12 @@ def scan_near_expiry_options(
             for value in (signal["ma_cross_bars_ago"], signal["macd_cross_bars_ago"])
         )
         bullish_states = int(signal["ma_bullish"]) + int(signal["macd_bullish"])
+        option_type = "CALL" if item.get("options_cp_type") == 1 else "PUT"
+        confirmation = direction_confirmation(
+            option_type, signal,
+            underlying_signal_values.get(item.get("options_target_code"), {}),
+        )
+        signal_score = recent_crosses * 2 + bullish_states
         rows.append({
             "code": item["code"],
             "name": item.get("name", item["code"]),
@@ -234,18 +277,23 @@ def scan_near_expiry_options(
             "underlying": item.get("options_target_code", ""),
             "underlying_price": item.get("underlying_price"),
             "moneyness": item.get("moneyness"),
-            "option_type": "CALL" if item.get("options_cp_type") == 1 else "PUT",
+            "option_type": option_type,
             "strike": item.get("options_exercise_price"),
             "bar_time": bars["datetime"].iloc[-1],
             "last_price": float(bars["close"].iloc[-1]),
             "bars": len(bars),
-            "signal_score": recent_crosses * 2 + bullish_states,
+            "signal_score": signal_score,
+            "confirmation_score": (
+                signal_score + confirmation["direction_confirmation_count"]
+            ),
+            **confirmation,
+            **underlying_signals.get(item.get("options_target_code"), {}),
             **liquidity,
             **signal,
         })
     if not rows:
         return pd.DataFrame()
     return pd.DataFrame(rows).sort_values(
-        ["signal_score", "dte", "recent_volume", "code"],
-        ascending=[False, True, False, True],
+        ["confirmation_score", "signal_score", "dte", "recent_volume", "code"],
+        ascending=[False, False, True, False, True],
     ).reset_index(drop=True)

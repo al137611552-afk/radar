@@ -20,6 +20,11 @@ class OptionCliTests(unittest.TestCase):
             "recent_volume": 1000, "open_interest": 500,
             "ma_bullish": True, "ma_cross_bars_ago": 0,
             "macd_bullish": True, "macd_cross_bars_ago": 2,
+            "underlying_ma_bullish": True,
+            "underlying_ma_cross_bars_ago": None,
+            "underlying_macd_bullish": True,
+            "underlying_macd_cross_bars_ago": 1,
+            "double_confirmed": True, "confirmation_score": 8,
             "signal_score": 6,
         }])
 
@@ -27,11 +32,26 @@ class OptionCliTests(unittest.TestCase):
 
         self.assertEqual(display.columns.tolist(), [
             "代码", "DTE", "类型", "行权价", "虚实值%", "最新价", "小时线截止",
-            "近20小时量", "持仓量", "MA状态", "MACD状态", "信号分",
+            "近20小时量", "持仓量", "期权MA", "期权MACD", "标的MA",
+            "标的MACD", "双确认", "确认分",
         ])
-        self.assertEqual(display.loc[0, "MA状态"], "刚金叉")
-        self.assertEqual(display.loc[0, "MACD状态"], "2根前金叉")
+        self.assertEqual(display.loc[0, "期权MA"], "刚金叉")
+        self.assertEqual(display.loc[0, "期权MACD"], "2根前金叉")
+        self.assertEqual(display.loc[0, "标的MACD"], "1根前金叉")
+        self.assertEqual(display.loc[0, "双确认"], "是")
         self.assertEqual(display.loc[0, "虚实值%"], 1.54)
+
+    def test_double_mode_keeps_only_direction_confirmed_options(self):
+        source = pd.DataFrame({
+            "code": ["recent-confirmed", "unconfirmed", "stale-confirmed"],
+            "double_confirmed": [True, False, True],
+            "ma_cross_bars_ago": [0, 0, None],
+            "macd_cross_bars_ago": [None, None, None],
+        })
+
+        result = option_cli.filter_signal_mode(source, "double")
+
+        self.assertEqual(result["code"].tolist(), ["recent-confirmed"])
 
 
 if __name__ == "__main__":

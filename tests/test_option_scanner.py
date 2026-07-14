@@ -124,6 +124,22 @@ class HourlySignalTests(unittest.TestCase):
         self.assertEqual(result["open_interest"], 500)
         self.assertEqual(result["stale_hours"], 1.0)
 
+    def test_direction_confirmation_respects_call_and_put_direction(self):
+        option_signal = {"ma_bullish": True, "macd_bullish": True}
+        underlying_signal = {"ma_bullish": True, "macd_bullish": True}
+
+        call = option_scanner.direction_confirmation(
+            "CALL", option_signal, underlying_signal
+        )
+        put = option_scanner.direction_confirmation(
+            "PUT", option_signal, underlying_signal
+        )
+
+        self.assertTrue(call["ma_direction_confirmed"])
+        self.assertTrue(call["double_confirmed"])
+        self.assertFalse(put["ma_direction_confirmed"])
+        self.assertFalse(put["double_confirmed"])
+
 
 class ScannerIntegrationTests(unittest.TestCase):
     def test_scans_candidates_in_one_batch_and_returns_signal_rows(self):
@@ -132,7 +148,7 @@ class ScannerIntegrationTests(unittest.TestCase):
             "category_type": 7, "variety_type": 1, "exchange_code": "SHFE",
             "start_date": "2026-01-01", "expire_time": "2026-07-20",
             "options_cp_type": 1, "options_target_code": "cu2608",
-            "options_exercise_price": 100000,
+            "options_exercise_price": 3,
         }
         bars = pd.DataFrame({
             "datetime": pd.date_range("2026-07-14 09:00", periods=7, freq="h"),
@@ -152,9 +168,7 @@ class ScannerIntegrationTests(unittest.TestCase):
             def get_klines_by_count(self, codes, interval, count):
                 self.fetch_calls.append((codes, interval, count))
                 if codes == ["cu2608"]:
-                    underlying = bars.copy()
-                    underlying["close"] = 100000
-                    return {"cu2608": underlying}
+                    return {"cu2608": bars.copy()}
                 return {metadata["code"]: bars}
 
         client = Client()
@@ -168,7 +182,7 @@ class ScannerIntegrationTests(unittest.TestCase):
 
         self.assertEqual(client.search_args, {"category_type": 7})
         self.assertEqual(client.fetch_calls, [
-            (["cu2608"], "1h", 2),
+            (["cu2608"], "1h", 10),
             ([metadata["code"]], "1h", 10),
         ])
         self.assertEqual(result.loc[0, "code"], metadata["code"])
@@ -176,6 +190,10 @@ class ScannerIntegrationTests(unittest.TestCase):
         self.assertTrue(result.loc[0, "liquid"])
         self.assertTrue(result.loc[0, "ma_bullish"])
         self.assertEqual(result.loc[0, "macd_cross_bars_ago"], 1)
+        self.assertTrue(result.loc[0, "underlying_ma_bullish"])
+        self.assertEqual(result.loc[0, "underlying_macd_cross_bars_ago"], 1)
+        self.assertTrue(result.loc[0, "double_confirmed"])
+        self.assertEqual(result.loc[0, "confirmation_score"], 8)
 
 
 if __name__ == "__main__":

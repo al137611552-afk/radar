@@ -85,6 +85,7 @@ class HourlySignalTests(unittest.TestCase):
         self.assertTrue(result["ma_bullish"])
         self.assertTrue(result["ma_cross_now"])
         self.assertEqual(result["ma_cross_bars_ago"], 0)
+        self.assertEqual(result["ma_cross_time"], pd.Timestamp("2026-07-14 13:00"))
         self.assertAlmostEqual(result["ma_fast"], 2.5)
         self.assertAlmostEqual(result["ma_slow"], 7 / 3)
 
@@ -102,6 +103,7 @@ class HourlySignalTests(unittest.TestCase):
         self.assertTrue(result["macd_bullish"])
         self.assertFalse(result["macd_cross_now"])
         self.assertEqual(result["macd_cross_bars_ago"], 1)
+        self.assertEqual(result["macd_cross_time"], pd.Timestamp("2026-07-14 14:00"))
         self.assertGreater(result["macd_line"], result["macd_signal"])
 
     def test_liquidity_uses_recent_trading_activity(self):

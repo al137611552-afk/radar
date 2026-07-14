@@ -109,6 +109,10 @@ def analyze_hourly_signal(
     slow = closes.rolling(ma_slow).mean()
     ma_cross = fast.gt(slow) & fast.shift(1).le(slow.shift(1))
     ma_bars_ago = _bars_since_recent_cross(ma_cross, cross_lookback)
+    ma_cross_time = (
+        None if ma_bars_ago is None
+        else pd.Timestamp(frame["datetime"].iloc[-1 - ma_bars_ago])
+    )
 
     macd_line = (
         closes.ewm(span=macd_fast, adjust=False).mean()
@@ -119,18 +123,24 @@ def analyze_hourly_signal(
         signal_line.shift(1)
     )
     macd_bars_ago = _bars_since_recent_cross(macd_cross, cross_lookback)
+    macd_cross_time = (
+        None if macd_bars_ago is None
+        else pd.Timestamp(frame["datetime"].iloc[-1 - macd_bars_ago])
+    )
     return {
         "ma_fast": float(fast.iloc[-1]),
         "ma_slow": float(slow.iloc[-1]),
         "ma_bullish": bool(fast.iloc[-1] > slow.iloc[-1]),
         "ma_cross_now": ma_bars_ago == 0,
         "ma_cross_bars_ago": ma_bars_ago,
+        "ma_cross_time": ma_cross_time,
         "macd_line": float(macd_line.iloc[-1]),
         "macd_signal": float(signal_line.iloc[-1]),
         "macd_hist": float(macd_line.iloc[-1] - signal_line.iloc[-1]),
         "macd_bullish": bool(macd_line.iloc[-1] > signal_line.iloc[-1]),
         "macd_cross_now": macd_bars_ago == 0,
         "macd_cross_bars_ago": macd_bars_ago,
+        "macd_cross_time": macd_cross_time,
     }
 
 

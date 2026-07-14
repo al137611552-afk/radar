@@ -1,6 +1,10 @@
 import sys
+import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -52,6 +56,87 @@ class OptionCliTests(unittest.TestCase):
         result = option_cli.filter_signal_mode(source, "double")
 
         self.assertEqual(result["code"].tolist(), ["recent-confirmed"])
+
+    def test_incremental_filter_persists_and_suppresses_repeats(self):
+        source = pd.DataFrame([{
+            "code": "A", "ma_cross_time": pd.Timestamp("2026-07-14 10:00"),
+            "macd_cross_time": None, "double_confirmed": True,
+            "ma_direction_confirmed": True, "macd_direction_confirmed": False,
+        }])
+        with tempfile.TemporaryDirectory() as directory:
+            state_path = Path(directory) / "options.json"
+
+            first = option_cli.filter_incremental_signals(
+                source, "double", state_path
+            )
+            repeated = option_cli.filter_incremental_signals(
+                source, "double", state_path
+            )
+
+            self.assertEqual(first["alert_type"].tolist(), ["首次命中"])
+            self.assertTrue(repeated.empty)
+            self.assertTrue(state_path.exists())
+
+    def test_display_includes_alert_type_for_incremental_rows(self):
+        source = pd.DataFrame([{
+            "code": "A", "dte": 5, "option_type": "CALL", "strike": 100,
+            "moneyness": 0.01, "last_price": 2,
+            "bar_time": pd.Timestamp("2026-07-14 15:00"),
+            "recent_volume": 100, "open_interest": 200,
+            "ma_bullish": True, "ma_cross_bars_ago": 0,
+            "macd_bullish": False, "macd_cross_bars_ago": None,
+            "underlying_ma_bullish": True,
+            "underlying_ma_cross_bars_ago": None,
+            "underlying_macd_bullish": False,
+            "underlying_macd_cross_bars_ago": None,
+            "double_confirmed": True, "confirmation_score": 4,
+            "alert_type": "首次命中",
+        }])
+
+        display = option_cli.build_display_table(source)
+
+        self.assertEqual(display.columns[0], "告警")
+        self.assertEqual(display.loc[0, "告警"], "首次命中")
+
+    def test_parse_args_supports_incremental_state_options(self):
+        args = option_cli.parse_args([
+            "--new-only", "--state-file", "output/state/custom.json"
+        ])
+
+        self.assertTrue(args.new_only)
+        self.assertEqual(args.state_file, Path("output/state/custom.json"))
+
+    def test_main_new_only_suppresses_repeated_cli_output(self):
+        source = pd.DataFrame([{
+            "code": "A", "dte": 5, "option_type": "CALL", "strike": 100,
+            "moneyness": 0.01, "last_price": 2,
+            "bar_time": pd.Timestamp("2026-07-14 15:00"),
+            "recent_volume": 100, "open_interest": 200,
+            "ma_bullish": True, "ma_cross_bars_ago": 0,
+            "ma_cross_time": pd.Timestamp("2026-07-14 15:00"),
+            "macd_bullish": False, "macd_cross_bars_ago": None,
+            "macd_cross_time": None,
+            "underlying_ma_bullish": True,
+            "underlying_ma_cross_bars_ago": None,
+            "underlying_macd_bullish": False,
+            "underlying_macd_cross_bars_ago": None,
+            "double_confirmed": True, "ma_direction_confirmed": True,
+            "macd_direction_confirmed": False, "confirmation_score": 4,
+        }])
+        with tempfile.TemporaryDirectory() as directory:
+            state_path = Path(directory) / "state.json"
+            argv = ["--new-only", "--state-file", str(state_path)]
+            first_output, second_output = StringIO(), StringIO()
+            with patch.object(option_cli, "QuoteClient", return_value=object()), \
+                 patch.object(option_cli, "scan_near_expiry_options", return_value=source):
+                with redirect_stdout(first_output):
+                    first_code = option_cli.main(argv)
+                with redirect_stdout(second_output):
+                    second_code = option_cli.main(argv)
+
+            self.assertEqual((first_code, second_code), (0, 0))
+            self.assertIn("首次命中", first_output.getvalue())
+            self.assertIn("没有新增或变化", second_output.getvalue())
 
 
 if __name__ == "__main__":

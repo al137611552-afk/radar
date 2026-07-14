@@ -55,6 +55,18 @@ export QUOTE_API_KEY='你的 Access Key'
 .venv/bin/python option_cli.py --mode double --csv output/options_latest.csv
 ```
 
+只输出首次命中、新金叉、确认变化和信号失效，避免定时扫描重复提醒：
+
+```bash
+.venv/bin/python option_cli.py \
+  --mode double \
+  --new-only \
+  --state-file output/state/options.json \
+  --csv output/options_alerts.csv
+```
+
+首次使用会把当前全部命中标记为“首次命中”；之后相同信号保持静默。状态按扫描模式隔离，JSON采用原子替换写入，运行产物不会提交到Git。
+
 可用 `--strikes` 控制每个标的每个购沽方向保留的近平值档数，使用 `--min-volume`、`--min-open-interest` 调整流动性门槛。
 
 ## 商品期货热点雷达

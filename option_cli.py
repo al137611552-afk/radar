@@ -9,6 +9,13 @@ import pandas as pd
 
 from option_scanner import scan_near_expiry_options
 from quote_api import QuoteClient
+from signal_state import diff_signals, load_state, save_state
+
+
+SIGNAL_FINGERPRINT_FIELDS = (
+    "ma_cross_time", "macd_cross_time", "double_confirmed",
+    "ma_direction_confirmed", "macd_direction_confirmed",
+)
 
 
 def _signal_label(bullish, bars_ago):
@@ -61,6 +68,8 @@ def build_display_table(result: pd.DataFrame) -> pd.DataFrame:
         "双确认": result["double_confirmed"].map({True: "是", False: "否"}),
         "确认分": result["confirmation_score"],
     })
+    if "alert_type" in result:
+        display.insert(0, "告警", result["alert_type"])
     for column in ("最新价", "近20小时量", "持仓量"):
         display[column] = pd.to_numeric(display[column], errors="coerce").round(2)
     return display
@@ -85,6 +94,16 @@ def filter_signal_mode(result: pd.DataFrame, mode: str) -> pd.DataFrame:
     return result.loc[mask].reset_index(drop=True)
 
 
+def filter_incremental_signals(result, mode, state_path):
+    previous = load_state(state_path)
+    alerts, state = diff_signals(
+        result, previous, fingerprint_fields=SIGNAL_FINGERPRINT_FIELDS,
+        scope=f"option:{mode}",
+    )
+    save_state(state_path, state)
+    return alerts
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description="扫描1至14天到期、平值附近且流动性合格的商品期权小时金叉"
@@ -103,6 +122,15 @@ def parse_args(argv=None):
     parser.add_argument("--max-moneyness", type=float, default=0.15)
     parser.add_argument("--min-volume", type=float, default=100)
     parser.add_argument("--min-open-interest", type=float, default=100)
+    parser.add_argument(
+        "--new-only", action="store_true",
+        help="只显示首次命中、新金叉、确认变化和信号失效",
+    )
+    parser.add_argument(
+        "--state-file", type=Path,
+        default=Path("output/state/options.json"),
+        help="增量告警状态文件",
+    )
     parser.add_argument("--csv", type=Path)
     return parser.parse_args(argv)
 
@@ -115,14 +143,25 @@ def main(argv=None):
         min_volume=args.min_volume, min_open_interest=args.min_open_interest,
     )
     filtered = filter_signal_mode(result, args.mode)
+    matched_count = len(filtered)
+    if args.new_only:
+        filtered = filter_incremental_signals(
+            filtered, args.mode, args.state_file
+        )
     if args.csv:
         args.csv.parent.mkdir(parents=True, exist_ok=True)
         filtered.to_csv(args.csv, index=False, encoding="utf-8-sig")
-    print(
-        f"临期期权可分析 {len(result)} 个；模式 {args.mode} 命中 {len(filtered)} 个"
+    summary = (
+        f"临期期权可分析 {len(result)} 个；模式 {args.mode} 命中 {matched_count} 个"
     )
+    if args.new_only:
+        summary += f"；新增或变化 {len(filtered)} 个"
+    print(summary)
     if filtered.empty:
-        print("当前没有符合条件的期权。")
+        print(
+            "当前没有新增或变化的信号。" if args.new_only
+            else "当前没有符合条件的期权。"
+        )
         return 0
     print(build_display_table(filtered.head(args.top)).to_string(index=False))
     if args.csv:

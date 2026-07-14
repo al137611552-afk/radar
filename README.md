@@ -1,0 +1,65 @@
+# Watchman 期货辅助工具（阶段 0）
+
+当前已实现：基于 Quote API 的商品 `6666` 收益率指数，生成 5/20/60/120 交易日动量、全商品等权超额收益及横截面排名。
+
+## 运行
+
+```bash
+cd /root/watchman
+export QUOTE_API_KEY='你的 Access Key'
+.venv/bin/python momentum_cli.py --top 20
+```
+
+保存完整 CSV：
+
+```bash
+.venv/bin/python momentum_cli.py --top 20 --csv output/momentum_latest.csv
+```
+
+自定义周期：
+
+```bash
+.venv/bin/python momentum_cli.py --horizons 5,10,20,60 --top 30
+```
+
+## 计算口径
+
+- 标的池：SHFE、DCE、CZCE、INE、GFEX 中 `variety_type=7` 且代码严格以 `6666` 结尾的正式商品收益率指数；自动排除测试代码和 CFFEX 金融期货。
+- N 日收益：`最新完整日线收盘 / N 个交易日前收盘 - 1`。
+- N 日超额：品种 N 日收益减去当前有效商品池的等权平均 N 日收益。
+- N 日排名：按 N 日收益降序排名。
+- 综合动量分：各周期横截面百分位的等权平均，范围 0~100。
+- 完整K线：交易日尚未结束时自动丢弃正在形成的日线；夜盘标记为下一交易日的部分K线也会被排除。
+
+注意：`6666` 指数的精确编制、换月和展期规则仍需数据接口管理员确认。当前结果适合作为研究/辅助决策信号，不构成投资建议。
+
+## 临期期权小时金叉扫描
+
+默认筛选自然日到期天数 `1 <= DTE < 15`、平值附近、近20根小时K线成交与持仓合格的商品期权，并计算 MA5/MA20 与 MACD(12,26,9)。API 的小时K线时间戳按结束时间处理，尚未结束的小时线不会参与信号。
+
+```bash
+export QUOTE_API_KEY='你的 Access Key'
+.venv/bin/python option_cli.py --mode recent --top 30
+```
+
+模式：
+
+- `recent`：MA或MACD在最近3根完整小时线内金叉（默认）
+- `bullish`：MA或MACD当前处于多头状态
+- `all`：显示所有通过流动性筛选的近平值期权
+
+导出CSV：
+
+```bash
+.venv/bin/python option_cli.py --mode recent --csv output/options_latest.csv
+```
+
+可用 `--strikes` 控制每个标的每个购沽方向保留的近平值档数，使用 `--min-volume`、`--min-open-interest` 调整流动性门槛。
+
+## 测试
+
+```bash
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+测试不访问真实 API，也不需要 Access Key；真实冒烟运行需要通过环境变量注入密钥。

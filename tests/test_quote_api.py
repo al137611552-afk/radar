@@ -78,10 +78,24 @@ class QuoteClientConfigurationTests(unittest.TestCase):
             "start_time": "2026-07-14", "end_time": "2026-07-14"
         })
 
+    def test_main_contracts_by_date_uses_historical_endpoint_directly(self):
+        session = FakeSession([FakeResponse({"code": 0, "data": [
+            {"main_variety_code": "rb9999", "variety_code": "rb2605"},
+        ]})])
+        client = quote_api.QuoteClient(api_key="secret", session=session)
+
+        result = client.main_contracts_by_date("2026-01-15")
+
+        self.assertEqual(result, {"rb": "rb2605"})
+        self.assertEqual([call[0] for call in session.calls], ["POST"])
+        self.assertEqual(session.calls[0][2]["json"], {
+            "start_time": "2026-01-15", "end_time": "2026-01-15"
+        })
+
     def test_get_kline_by_count_returns_sorted_shanghai_dataframe(self):
         session = FakeSession([FakeResponse({"code": 0, "data": [
             {"time_stamp": 3600, "close": 2, "open": 2, "high": 2,
-             "low": 2, "volume": 1},
+             "low": 2, "volume": 1, "settlement": 1.5},
             {"time_stamp": 0, "close": 1, "open": 1, "high": 1,
              "low": 1, "volume": 1},
         ]})])
@@ -90,6 +104,8 @@ class QuoteClientConfigurationTests(unittest.TestCase):
         frame = client.get_kline_by_count("au6666", interval="day", count=2)
 
         self.assertEqual(frame["close"].tolist(), [1, 2])
+        self.assertTrue(quote_api.pd.isna(frame["settlement"].iloc[0]))
+        self.assertEqual(frame["settlement"].iloc[1], 1.5)
         self.assertEqual(str(frame["datetime"].iloc[0]), "1970-01-01 08:00:00")
         self.assertEqual(session.calls[0][2]["json"], {
             "variety_code": "au6666", "interval_range": 101, "count": 2

@@ -41,6 +41,16 @@ class HotspotCliTests(unittest.TestCase):
         self.assertEqual(display.loc[0, "成交额(亿)"], 305.05)
         self.assertEqual(display.loc[0, "资金结构"], "多头增仓")
 
+    def test_rollover_table_uses_dash_for_non_comparable_open_interest(self):
+        source = self.source.copy()
+        source.loc[0, ["oi_change", "oi_change_pct"]] = float("nan")
+        source.loc[0, "position_action"] = "主力切换"
+
+        display = hotspot_cli.build_side_table(source, "多")
+
+        self.assertEqual(display.loc[0, "持仓变化"], "—")
+        self.assertEqual(display.loc[0, "持仓变化%"], "—")
+
     def test_renders_standalone_turnover_heatmap(self):
         html = hotspot_cli.render_heatmap_html(
             self.source, title="商品期货热点雷达"
@@ -56,6 +66,17 @@ class HotspotCliTests(unittest.TestCase):
         self.assertNotIn("面积代表成交额", html)
         self.assertNotIn("cdn.", html.lower())
 
+    def test_heatmap_handles_main_rollover_without_showing_nan(self):
+        source = self.source.copy()
+        source.loc[0, "oi_change"] = float("nan")
+        source.loc[0, "position_action"] = "主力切换"
+
+        html = hotspot_cli.render_heatmap_html(source)
+
+        self.assertIn("主力切换 · 持仓 不比较", html)
+        self.assertNotIn("nan", html.lower())
+        self.assertIn("结算价优先", html)
+
     def test_main_writes_csv_and_html_artifacts(self):
         metadata = [{
             "code": "rb2610", "name": "螺纹钢", "exchange_code": "SHFE",
@@ -69,7 +90,10 @@ class HotspotCliTests(unittest.TestCase):
 
         class Client:
             def main_contracts(self):
-                return {"rb9999": "rb2610"}
+                return {"rb": "rb2610"}
+
+            def main_contracts_by_date(self, as_of):
+                return {"rb": "rb2610"}
 
             def search(self, **kwargs):
                 return metadata

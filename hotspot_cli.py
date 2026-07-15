@@ -27,6 +27,8 @@ def build_side_table(result: pd.DataFrame, side: str, top=10) -> pd.DataFrame:
     }).reset_index(drop=True)
     for column in ("成交额(亿)", "涨跌%", "持仓变化%", "市场占比%"):
         display[column] = pd.to_numeric(display[column], errors="coerce").round(2)
+    for column in ("持仓变化", "持仓变化%"):
+        display[column] = display[column].where(display[column].notna(), "—")
     return display
 
 
@@ -38,6 +40,10 @@ def _heat_tiles(rows, css_class):
     for _, row in rows.iterrows():
         weight = min(5.0, max(1.0, float(row["turnover_yi"]) / median))
         intensity = min(0.92, 0.34 + abs(float(row["change_pct"])) / 8)
+        oi_text = (
+            "不比较" if pd.isna(row["oi_change"])
+            else f'{float(row["oi_change"]):+,.0f}'
+        )
         tiles.append(
             f'<div class="tile {css_class}" style="flex-grow:{weight:.2f};--intensity:{intensity:.2f}">'
             f'<div class="tile-head"><b>{escape(str(row["name"]))}</b>'
@@ -45,7 +51,7 @@ def _heat_tiles(rows, css_class):
             f'<div class="change">{float(row["change_pct"]):+.2f}%</div>'
             f'<div class="money">{float(row["turnover_yi"]):,.2f} 亿</div>'
             f'<div class="meta">{escape(str(row["position_action"]))} · '
-            f'持仓 {float(row["oi_change"]):+,.0f}</div></div>'
+            f'持仓 {oi_text}</div></div>'
         )
     return "".join(tiles)
 
@@ -79,7 +85,7 @@ h1{{margin:0;font-size:30px}}.sub{{color:#8994a8;font-size:13px}}.legend{{displa
 <div class="legend"><span><i class="dot red"></i>多头热点</span><span><i class="dot green"></i>空头热点</span></div></header>
 <section class="panel"><h2>多头成交额热点</h2><div class="heat">{_heat_tiles(bullish, "bull")}</div></section>
 <section class="panel"><h2>空头成交额热点</h2><div class="heat">{_heat_tiles(bearish, "bear")}</div></section>
-<div class="note">说明：多/空按相对上一交易日收盘价的涨跌方向划分，不代表逐笔主动买卖量；“资金结构”结合价格变化与持仓量变化，分为多头增仓、空头增仓、空头减仓和多头减仓。</div>
+<div class="note">说明：多/空按上一交易日结算价优先、收盘价回退的涨跌方向划分，不代表逐笔主动买卖量；“资金结构”结合价格变化与持仓量变化。主力切换时不比较跨合约持仓变化。</div>
 </main></body></html>'''
 
 
@@ -111,7 +117,7 @@ def main(argv=None, client=None):
     print("\n=== 空头成交额TOP ===")
     bearish = build_side_table(result, "空", args.top)
     print(bearish.to_string(index=False) if not bearish.empty else "暂无空头热点")
-    print("\n口径：多空按相对上一交易日收盘涨跌划分；持仓变化用于识别增仓/减仓结构，非逐笔主动买卖量。")
+    print("\n口径：多空按上一交易日结算价优先、收盘价回退的涨跌划分；主力切换时不比较跨合约持仓变化；非逐笔主动买卖量。")
 
     if args.csv:
         target = Path(args.csv)

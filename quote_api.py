@@ -72,13 +72,18 @@ class QuoteClient:
             return body["data"]
         except (requests.RequestException, RuntimeError, ValueError, KeyError):
             day = as_of or pd.Timestamp.now(tz="Asia/Shanghai").date().isoformat()
-            rows = self._post("/api/v1/varieties/main-by-date", {
-                "start_time": str(day), "end_time": str(day),
-            })
-            return {
-                row["main_variety_code"].removesuffix("9999"): row["variety_code"]
-                for row in rows
-            }
+            return self.main_contracts_by_date(day)
+
+    def main_contracts_by_date(self, as_of):
+        """Return the exchange main-contract mapping for a specific date."""
+        day = str(as_of)
+        rows = self._post("/api/v1/varieties/main-by-date", {
+            "start_time": day, "end_time": day,
+        })
+        return {
+            row["main_variety_code"].removesuffix("9999"): row["variety_code"]
+            for row in rows
+        }
 
     def get_kline_by_count(self, variety_code, interval="day", count=100):
         data = self._post("/api/v1/kline/by-count", {
@@ -153,7 +158,7 @@ def _to_df(klines):
     df = pd.DataFrame(klines)
     df["datetime"] = pd.to_datetime(df["time_stamp"], unit="s", utc=True) \
         .dt.tz_convert("Asia/Shanghai").dt.tz_localize(None)
-    cols = ["datetime", "open", "high", "low", "close",
+    cols = ["datetime", "open", "high", "low", "close", "settlement",
             "volume", "money", "open_interest"]
     df = df[[c for c in cols if c in df.columns]]
     return df.sort_values("datetime").reset_index(drop=True)

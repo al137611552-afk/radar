@@ -84,7 +84,11 @@ class HotspotRankingTests(unittest.TestCase):
 
         class Client:
             def main_contracts(self):
-                return {"rb9999": "rb2610"}
+                return {"rb": "rb2610"}
+
+            def main_contracts_by_date(self, as_of):
+                self.historical_main_date = as_of
+                return {"rb": "rb2605"}
 
             def search(self, **kwargs):
                 self.search_args = kwargs
@@ -99,7 +103,9 @@ class HotspotRankingTests(unittest.TestCase):
 
         self.assertEqual(client.search_args, {"category_type": 1})
         self.assertEqual(client.fetch_args, (["rb2610"], "day", 2))
+        self.assertEqual(client.historical_main_date, "2026-07-14")
         self.assertEqual(result["code"].tolist(), ["rb2610"])
+        self.assertEqual(result.loc[0, "position_action"], "主力切换")
 
     def test_excludes_contracts_without_a_bar_for_current_market_trade_date(self):
         metadata = [
@@ -121,6 +127,49 @@ class HotspotRankingTests(unittest.TestCase):
 
         self.assertEqual(result["code"].tolist(), ["rb2610"])
         self.assertEqual(result["trade_date"].unique().tolist(), ["2026-07-15"])
+
+    def test_uses_previous_settlement_when_available(self):
+        metadata = [{
+            "code": "rb2610", "name": "螺纹钢", "exchange_code": "SHFE"
+        }]
+        frame = pd.DataFrame({
+            "datetime": pd.to_datetime(["2026-07-14", "2026-07-15"]),
+            "close": [100, 88], "settlement": [80, None],
+            "volume": [100, 200], "money": [1_000_000, 2_000_000],
+            "open_interest": [1000, 1100],
+        })
+
+        result = hotspot_radar.build_hotspot_ranking(
+            metadata, {"rb2610": frame}
+        )
+
+        self.assertEqual(result.loc[0, "side"], "多")
+        self.assertAlmostEqual(result.loc[0, "change_pct"], 10.0)
+        self.assertEqual(result.loc[0, "reference_price_type"], "settlement")
+        self.assertEqual(result.loc[0, "reference_price"], 80.0)
+
+    def test_marks_main_rollover_and_disables_open_interest_comparison(self):
+        contracts = [{
+            "code": "rb2610", "name": "螺纹钢", "exchange_code": "SHFE"
+        }]
+        marked = hotspot_radar.mark_main_rollovers(
+            contracts, {"rb": "rb2610"}, {"rb": "rb2605"}
+        )
+        frame = pd.DataFrame({
+            "datetime": pd.to_datetime(["2026-07-14", "2026-07-15"]),
+            "close": [3000, 3030], "volume": [100, 200],
+            "money": [1_000_000, 2_000_000],
+            "open_interest": [900000, 100000],
+        })
+
+        result = hotspot_radar.build_hotspot_ranking(
+            marked, {"rb2610": frame}
+        )
+
+        self.assertTrue(result.loc[0, "main_switched"])
+        self.assertEqual(result.loc[0, "previous_main_contract"], "rb2605")
+        self.assertTrue(pd.isna(result.loc[0, "oi_change"]))
+        self.assertEqual(result.loc[0, "position_action"], "主力切换")
 
 
 if __name__ == "__main__":

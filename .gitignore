@@ -9,3 +9,5 @@ output/*.csv
 output/*.html
 output/state/
 output/history/
+output/scheduler/
+output/logs/

@@ -1,0 +1,30 @@
+[Unit]
+Description=Watchman futures market scheduler
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=watchman
+Group=watchman
+WorkingDirectory=/opt/watchman
+Environment=PYTHONDONTWRITEBYTECODE=1
+EnvironmentFile=/etc/watchman/watchman.env
+ExecStart=/usr/bin/env /opt/watchman/.venv/bin/python /opt/watchman/scheduler_cli.py --holidays-file /opt/watchman/config/holidays.txt run
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/opt/watchman/output
+
+[Install]
+WantedBy=multi-user.target

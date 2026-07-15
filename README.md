@@ -165,6 +165,56 @@ export QUOTE_API_KEY='你的 Access Key'
 
 历史数据库、WAL文件和状态文件都位于已忽略的运行产物目录，不会提交到Git。
 
+## 交易时段感知自动调度器
+
+调度器会按上海时区运行三项任务，并以“任务 + 逻辑时点”在SQLite中去重：
+
+- `intraday`：日盘及夜盘每根完整5分钟线后运行；
+- `options`：交易时段内每个完整时钟小时后运行；
+- `momentum`：工作日15:00日盘收盘后运行。
+
+日盘自动处理 `10:15-10:30` 盘间休息、`11:30-13:30` 午休；夜盘按周一至周四晚间及周二至周五凌晨处理。不同品种夜盘收盘时间不一致时，由盘中雷达已有的K线新鲜度过滤继续剔除休市品种。周末自动跳过；法定节假日和节前无夜盘日由 `config/holidays.txt` 维护，夜盘会检查下一交易日是否休市。
+
+单次检查（适合冒烟验证或外部cron）：
+
+```bash
+export QUOTE_API_KEY='你的 Access Key'
+.venv/bin/python scheduler_cli.py \
+  --holidays-file config/holidays.txt \
+  run --once
+```
+
+前台持续运行：
+
+```bash
+.venv/bin/python scheduler_cli.py \
+  --holidays-file config/holidays.txt \
+  run --poll-seconds 30 --max-attempts 3 --timeout 300 --stale-after 360
+```
+
+查看最近运行、最近成功时间、失败原因及盘中历史库覆盖情况：
+
+```bash
+.venv/bin/python scheduler_cli.py status
+```
+
+手工补跑指定逻辑时点；已成功的时点默认不会重复执行，只有显式 `--force` 才会再次运行并保留新attempt记录：
+
+```bash
+.venv/bin/python scheduler_cli.py backfill intraday 2026-07-15T14:55:00+08:00
+.venv/bin/python scheduler_cli.py backfill momentum 2026-07-15T15:00:00+08:00 --force
+```
+
+运行状态默认保存到 `output/scheduler/runs.db`，任务日志分别流式追加到 `output/logs/`。SQLite使用WAL和事务级claim防止两个调度器重复执行；失败的旧逻辑时点会在后续轮询中优先重试，然后再执行当前时点，达到最大attempt后停止；陈旧锁阈值默认比任务超时多60秒，也可用 `--stale-after` 显式设置，但必须严格大于 `--timeout`，避免正常长任务被并行实例重复claim。单任务超时时会终止整个子进程组，不会阻断其他到期任务。
+
+生产常驻服务模板位于 `deploy/watchman-scheduler.service`。模板默认将只读程序部署到 `/opt/watchman`，使用专用 `watchman` 用户，并通过systemd沙箱仅开放 `/opt/watchman/output` 写权限；不要直接以root运行行情解析任务。安装前需要：
+
+1. 创建不可登录的 `watchman` 系统用户，将项目和虚拟环境部署到 `/opt/watchman`，由root持有程序文件，并让 `watchman` 可读取、仅可写 `output/`；
+2. 在 `/etc/watchman/watchman.env` 中配置 `QUOTE_API_KEY=...`，目录和文件仅允许root读取；
+3. 按交易所正式日历维护 `/opt/watchman/config/holidays.txt`；
+4. 将服务模板复制到systemd目录，执行daemon-reload、enable和start；
+5. 用 `/opt/watchman/.venv/bin/python /opt/watchman/scheduler_cli.py status` 和 `/opt/watchman/output/logs/` 验证首轮执行。
+
 ## 测试
 
 ```bash

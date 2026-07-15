@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Watchman · 期货监控台</title>
+  <link rel="stylesheet" href="/assets/dashboard.css">
+  <script src="/assets/dashboard.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <div><strong>WATCHMAN</strong><small>FUTURES INTELLIGENCE</small></div>
+      </div>
+      <nav class="nav" aria-label="功能导航">
+        <button class="nav-item active" data-panel="overview"><span>01</span>总览</button>
+        <button class="nav-item" data-panel="intraday"><span>02</span>盘中雷达</button>
+        <button class="nav-item" data-panel="options"><span>03</span>期权信号</button>
+        <button class="nav-item" data-panel="momentum"><span>04</span>动量排名</button>
+        <button class="nav-item" data-panel="tasks"><span>05</span>任务状态</button>
+      </nav>
+      <div class="sidebar-foot">
+        <div class="connection"><span id="connection-dot"></span><b id="connection-text">连接中</b></div>
+        <small>只读面板 · 上海时区</small>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">MARKET OPERATIONS</p>
+          <h1 id="page-title">市场总览</h1>
+        </div>
+        <div class="top-actions">
+          <label class="search-wrap">
+            <span aria-hidden="true">⌕</span>
+            <input id="global-search" type="search" placeholder="搜索代码、名称或交易所" autocomplete="off">
+          </label>
+          <button id="refresh-button" class="refresh-button" type="button"><span>↻</span>刷新</button>
+        </div>
+      </header>
+
+      <section class="panel active" data-panel="overview">
+        <div class="hero-strip">
+          <div><p class="eyebrow">SYSTEM PULSE</p><h2>中国期货市场监控</h2><p id="hero-copy">正在读取本地行情产物与调度状态。</p></div>
+          <div class="hero-time"><strong id="market-time">--:--:--</strong><span id="market-date">----/--/--</span></div>
+        </div>
+        <div id="summary-cards" class="summary-grid" aria-live="polite"></div>
+        <div class="overview-grid">
+          <article class="card span-2">
+            <div class="card-head"><div><p class="eyebrow">LIQUIDITY RADAR</p><h3>盘中成交额热点</h3></div><button class="text-button" data-open-panel="intraday">查看全部 →</button></div>
+            <div id="overview-intraday" class="compact-list empty-state">等待数据</div>
+          </article>
+          <article class="card">
+            <div class="card-head"><div><p class="eyebrow">SIGNAL DESK</p><h3>期权双确认</h3></div><button class="text-button" data-open-panel="options">全部 →</button></div>
+            <div id="overview-options" class="signal-stack empty-state">等待数据</div>
+          </article>
+          <article class="card">
+            <div class="card-head"><div><p class="eyebrow">RELATIVE STRENGTH</p><h3>动量领跑</h3></div><button class="text-button" data-open-panel="momentum">全部 →</button></div>
+            <div id="overview-momentum" class="signal-stack empty-state">等待数据</div>
+          </article>
+          <article class="card span-2">
+            <div class="card-head"><div><p class="eyebrow">DATA PIPELINE</p><h3>数据新鲜度</h3></div><span id="updated-at" class="muted">尚未刷新</span></div>
+            <div id="freshness-grid" class="freshness-grid"></div>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel" data-panel="intraday">
+        <div class="section-intro"><div><p class="eyebrow">5-MINUTE FLOW</p><h2>盘中成交额雷达</h2><p>按近15分钟成交额排序，联合观察价格、持仓与成交加速度。</p></div><span id="intraday-meta" class="count-badge">0 合约</span></div>
+        <article class="table-card"><div class="table-scroll"><table><thead><tr><th>排名</th><th>合约</th><th>方向</th><th>最新价</th><th>15分成交额</th><th>15分涨跌</th><th>成交加速</th><th>持仓变化</th><th>K线时间</th></tr></thead><tbody id="intraday-table"></tbody></table></div></article>
+      </section>
+
+      <section class="panel" data-panel="options">
+        <div class="section-intro"><div><p class="eyebrow">DOUBLE CONFIRMATION</p><h2>临期期权信号</h2><p>期权技术信号与标的趋势双确认，聚焦流动性合格的近平值合约。</p></div><span id="options-meta" class="count-badge">0 信号</span></div>
+        <article class="table-card"><div class="table-scroll"><table><thead><tr><th>期权合约</th><th>类型</th><th>DTE</th><th>标的</th><th>行权价</th><th>最新价</th><th>信号</th><th>成交量</th><th>持仓量</th><th>K线时间</th></tr></thead><tbody id="options-table"></tbody></table></div></article>
+      </section>
+
+      <section class="panel" data-panel="momentum">
+        <div class="section-intro"><div><p class="eyebrow">CROSS-SECTIONAL MOMENTUM</p><h2>商品动量排名</h2><p>多周期横截面强弱评分，辅助识别趋势领先与落后品种。</p></div><span id="momentum-meta" class="count-badge">0 品种</span></div>
+        <article class="table-card"><div class="table-scroll"><table><thead><tr><th>排名</th><th>品种</th><th>综合分</th><th>5日</th><th>20日</th><th>60日</th><th>120日</th><th>交易所</th><th>日期</th></tr></thead><tbody id="momentum-table"></tbody></table></div></article>
+      </section>
+
+      <section class="panel" data-panel="tasks">
+        <div class="section-intro"><div><p class="eyebrow">SCHEDULER CONTROL</p><h2>自动任务状态</h2><p>展示每项任务最近运行、逻辑时点、重试次数和失败原因。</p></div><span class="readonly-badge">READ ONLY</span></div>
+        <div id="task-grid" class="task-grid empty-state">尚无任务运行记录</div>
+      </section>
+
+      <footer><span>Watchman Research Console</span><span>数据仅供研究与辅助决策，不构成投资建议</span></footer>
+    </main>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

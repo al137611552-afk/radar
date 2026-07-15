@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from atomic_io import atomic_to_csv
 from option_scanner import scan_near_expiry_options
 from quote_api import QuoteClient
 from signal_state import diff_signals, load_state, save_state
@@ -131,6 +132,10 @@ def parse_args(argv=None):
         default=Path("output/state/options.json"),
         help="增量告警状态文件",
     )
+    parser.add_argument(
+        "--snapshot-csv", type=Path,
+        help="保存未经过模式和增量过滤的完整期权快照",
+    )
     parser.add_argument("--csv", type=Path)
     return parser.parse_args(argv)
 
@@ -142,6 +147,8 @@ def main(argv=None):
         strikes_per_side=args.strikes, max_moneyness=args.max_moneyness,
         min_volume=args.min_volume, min_open_interest=args.min_open_interest,
     )
+    if args.snapshot_csv:
+        atomic_to_csv(result, args.snapshot_csv, index=False, encoding="utf-8-sig")
     filtered = filter_signal_mode(result, args.mode)
     matched_count = len(filtered)
     if args.new_only:
@@ -149,8 +156,7 @@ def main(argv=None):
             filtered, args.mode, args.state_file
         )
     if args.csv:
-        args.csv.parent.mkdir(parents=True, exist_ok=True)
-        filtered.to_csv(args.csv, index=False, encoding="utf-8-sig")
+        atomic_to_csv(filtered, args.csv, index=False, encoding="utf-8-sig")
     summary = (
         f"临期期权可分析 {len(result)} 个；模式 {args.mode} 命中 {matched_count} 个"
     )

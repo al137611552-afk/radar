@@ -1,0 +1,30 @@
+[Unit]
+Description=Watchman read-only futures dashboard
+After=network.target
+
+[Service]
+Type=simple
+User=watchman
+Group=watchman
+WorkingDirectory=/opt/watchman
+ExecStart=/usr/bin/env /opt/watchman/.venv/bin/python /opt/watchman/dashboard_cli.py --host 127.0.0.1 --port 8787
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectClock=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

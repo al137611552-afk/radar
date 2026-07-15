@@ -11,7 +11,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import option_cli
+import option_cli  # noqa: E402
 
 
 class OptionCliTests(unittest.TestCase):
@@ -100,11 +100,13 @@ class OptionCliTests(unittest.TestCase):
 
     def test_parse_args_supports_incremental_state_options(self):
         args = option_cli.parse_args([
-            "--new-only", "--state-file", "output/state/custom.json"
+            "--new-only", "--state-file", "output/state/custom.json",
+            "--snapshot-csv", "output/options_latest.csv",
         ])
 
         self.assertTrue(args.new_only)
         self.assertEqual(args.state_file, Path("output/state/custom.json"))
+        self.assertEqual(args.snapshot_csv, Path("output/options_latest.csv"))
 
     def test_main_new_only_suppresses_repeated_cli_output(self):
         source = pd.DataFrame([{
@@ -125,7 +127,11 @@ class OptionCliTests(unittest.TestCase):
         }])
         with tempfile.TemporaryDirectory() as directory:
             state_path = Path(directory) / "state.json"
-            argv = ["--new-only", "--state-file", str(state_path)]
+            snapshot_path = Path(directory) / "options_latest.csv"
+            argv = [
+                "--new-only", "--state-file", str(state_path),
+                "--snapshot-csv", str(snapshot_path),
+            ]
             first_output, second_output = StringIO(), StringIO()
             with patch.object(option_cli, "QuoteClient", return_value=object()), \
                  patch.object(option_cli, "scan_near_expiry_options", return_value=source):
@@ -137,6 +143,8 @@ class OptionCliTests(unittest.TestCase):
             self.assertEqual((first_code, second_code), (0, 0))
             self.assertIn("首次命中", first_output.getvalue())
             self.assertIn("没有新增或变化", second_output.getvalue())
+            snapshot = pd.read_csv(snapshot_path)
+            self.assertEqual(snapshot["code"].tolist(), ["A"])
 
 
 if __name__ == "__main__":

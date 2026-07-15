@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from atomic_io import atomic_to_csv
 from history_store import save_intraday_snapshot
 from intraday_radar import annotate_rank_changes, generate_intraday_radar
 from quote_api import QuoteClient
@@ -107,8 +108,7 @@ def main(argv=None, client=None):
         history_count = save_intraday_snapshot(args.history_db, result)
     result = apply_rank_state(result, args.state_file, top_n=args.top)
     if args.csv:
-        args.csv.parent.mkdir(parents=True, exist_ok=True)
-        result.to_csv(args.csv, index=False, encoding="utf-8-sig")
+        atomic_to_csv(result, args.csv, index=False, encoding="utf-8-sig")
     selected = result
     if args.changes_only:
         meaningful_move = result["rank_change"].abs().fillna(0).ge(3)

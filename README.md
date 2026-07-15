@@ -215,6 +215,32 @@ export QUOTE_API_KEY='你的 Access Key'
 4. 将服务模板复制到systemd目录，执行daemon-reload、enable和start；
 5. 用 `/opt/watchman/.venv/bin/python /opt/watchman/scheduler_cli.py status` 和 `/opt/watchman/output/logs/` 验证首轮执行。
 
+## HTML功能面板
+
+项目提供零新增依赖的只读Web面板，聚合盘中成交额、期权信号、动量排名、数据新鲜度与自动任务状态。面板每30秒自动刷新，支持手工刷新、功能页切换、代码/名称/交易所搜索和桌面/移动端响应式布局。
+
+```bash
+cd /root/watchman
+.venv/bin/python dashboard_cli.py
+```
+
+浏览器访问 `http://127.0.0.1:8787`。默认仅监听本机，不向浏览器提供API密钥，也不接受任意命令或任务执行请求；所有非空任务错误详情都会在API输出前替换为固定提示，原始错误仅保留在服务端。需要从个人电脑访问远程服务器时，建议使用SSH端口转发：
+
+```bash
+ssh -L 8787:127.0.0.1:8787 user@server
+```
+
+然后仍访问 `http://127.0.0.1:8787`。不要在没有反向代理认证与访问控制的情况下直接使用 `--host 0.0.0.0` 暴露到公网。
+
+生产只读服务模板位于 `deploy/watchman-dashboard.service`，与调度器使用同一个低权限 `watchman` 用户，且不需要 `QUOTE_API_KEY`。面板读取：
+
+- `output/intraday_latest.csv`
+- `output/options_latest.csv`
+- `output/momentum_latest.csv`
+- `output/scheduler/runs.db`
+
+上述文件尚未生成时，面板会显示等待状态而不是启动失败。
+
 ## 测试
 
 ```bash

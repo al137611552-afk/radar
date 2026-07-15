@@ -6,6 +6,7 @@ import argparse
 
 import pandas as pd
 
+from atomic_io import atomic_to_csv
 from quote_api import QuoteClient
 from ranking import generate_ranking
 
@@ -65,7 +66,7 @@ def main(argv=None):
         print("没有足够数据生成排名。")
         return 1
     if args.csv:
-        result.to_csv(args.csv, index=False, encoding="utf-8-sig")
+        atomic_to_csv(result, args.csv, index=False, encoding="utf-8-sig")
     display = build_display_table(result, args.horizons)
     if args.top > 0:
         display = display.head(args.top)

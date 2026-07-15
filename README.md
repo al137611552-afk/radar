@@ -95,6 +95,36 @@ export QUOTE_API_KEY='你的 Access Key'
 
 重要：行情接口只提供总成交额和总持仓量，没有逐笔主动买卖方向或席位净多/净空数据。因此雷达中的“多/空”是价格方向与价仓结构代理，不应理解为真实净多资金或真实净空资金。
 
+## 盘中成交额增速与排名变化
+
+盘中雷达一次批量读取国内商品主力的5分钟K线，仅使用扫描时刻已经结束的K线，计算近5、15、60个交易分钟的成交额和持仓变化，并按近15分钟成交额排名：
+
+```bash
+export QUOTE_API_KEY='你的 Access Key'
+.venv/bin/python intraday_cli.py \
+  --top 15 \
+  --state-file output/state/intraday_rank.json \
+  --csv output/intraday_latest.csv
+```
+
+再次扫描时，状态文件用于显示排名上升、下降、新进Top N、退出Top N及15分钟价格方向反转。只查看显著变化：
+
+```bash
+.venv/bin/python intraday_cli.py \
+  --top 15 \
+  --changes-only \
+  --state-file output/state/intraday_rank.json
+```
+
+指标口径：
+
+- `5分额/15分额/60分额`：最近1、3、12根完整5分钟K线成交额之和。
+- `15分加速%`：最近15分钟成交额相对之前15分钟的变化率。
+- `15分涨跌%`：最新收盘价相对3根K线前收盘价的变化。
+- `持仓5分/15分/60分`：最新持仓量相对1、3、12根K线前的变化。
+- 仅保留与全市场最新完整K线相差不超过15分钟的品种，避免休市或无夜盘品种混入实时榜单。
+- 首次运行会将当前Top N标记为“新进”；后续相同榜单保持静默，状态文件不会提交到Git。
+
 ## 测试
 
 ```bash

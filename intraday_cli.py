@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from history_store import save_intraday_snapshot
 from intraday_radar import annotate_rank_changes, generate_intraday_radar
 from quote_api import QuoteClient
 from signal_state import load_state, save_state
@@ -66,17 +67,32 @@ def apply_rank_state(result, state_path, top_n=10):
     return annotated
 
 
+def _positive_int(value):
+    number = int(value)
+    if number <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return number
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description="国内商品主力5/15/60分钟成交额增速与排名变化雷达"
     )
-    parser.add_argument("--top", type=int, default=15)
+    parser.add_argument("--top", type=_positive_int, default=15)
     parser.add_argument("--changes-only", action="store_true")
     parser.add_argument(
         "--state-file", type=Path,
         default=Path("output/state/intraday_rank.json"),
     )
     parser.add_argument("--csv", type=Path)
+    parser.add_argument(
+        "--history-db", type=Path,
+        default=Path("output/history/radar.db"),
+    )
+    parser.add_argument(
+        "--no-history", action="store_true",
+        help="本轮不写入SQLite历史快照",
+    )
     return parser.parse_args(argv)
 
 
@@ -86,6 +102,9 @@ def main(argv=None, client=None):
     if result.empty:
         print("当前没有足够的完整5分钟行情")
         return 1
+    history_count = 0
+    if not args.no_history:
+        history_count = save_intraday_snapshot(args.history_db, result)
     result = apply_rank_state(result, args.state_file, top_n=args.top)
     if args.csv:
         args.csv.parent.mkdir(parents=True, exist_ok=True)
@@ -110,6 +129,8 @@ def main(argv=None, client=None):
     print("\n口径：成交额按完整5分钟K线聚合；加速率为近15分钟相对前15分钟；排名变化相对上一次状态文件。")
     if args.csv:
         print(f"CSV已保存：{args.csv}")
+    if history_count:
+        print(f"历史快照已保存：{args.history_db}（{history_count}条）")
     return 0
 
 

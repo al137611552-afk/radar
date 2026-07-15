@@ -125,6 +125,46 @@ export QUOTE_API_KEY='你的 Access Key'
 - 仅保留与全市场最新完整K线相差不超过15分钟的品种，避免休市或无夜盘品种混入实时榜单。
 - 首次运行会将当前Top N标记为“新进”；后续相同榜单保持静默，状态文件不会提交到Git。
 
+### SQLite历史快照与热点持续性
+
+盘中雷达默认把每次完整横截面写入 `output/history/radar.db`。快照以“最新完整5分钟K线时间 + 合约代码”为唯一键；同一根K线重复扫描会更新原记录，不会产生重复数据。若某次只想查看实时榜而不落库，可使用 `--no-history`：
+
+```bash
+.venv/bin/python intraday_cli.py \
+  --top 15 \
+  --history-db output/history/radar.db
+
+.venv/bin/python intraday_cli.py --top 15 --no-history
+```
+
+分析最近12次快照中的热点持续性：
+
+```bash
+.venv/bin/python history_cli.py \
+  --db output/history/radar.db \
+  --top 15 \
+  --snapshots 12
+```
+
+查看单个主力合约最近20次扫描的排名轨迹：
+
+```bash
+.venv/bin/python history_cli.py \
+  --db output/history/radar.db \
+  --code lc2609 \
+  --limit 20
+```
+
+持续性分类口径：
+
+- `持续升温`：连续至少3次位于Top N，排名改善至少2名，且区间15分钟成交额增长为正。
+- `持续热点`：连续至少3次位于Top N，但不满足持续升温条件。
+- `脉冲热点`：短期/首次入榜，当前15分钟成交额加速率达到阈值（默认100%）。
+- `新晋热点`：当前进入Top N，但暂不满足以上条件。
+- `热点降温`：最新排名已跌出Top N；该状态保留在底层分析结果中，默认Top N表不展示。
+
+历史数据库、WAL文件和状态文件都位于已忽略的运行产物目录，不会提交到Git。
+
 ## 测试
 
 ```bash

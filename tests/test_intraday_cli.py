@@ -66,6 +66,16 @@ class IntradayCliTests(unittest.TestCase):
             self.assertEqual(second["rank_change"].tolist(), [0, 0])
             self.assertTrue(path.exists())
 
+    def test_parse_args_enables_sqlite_history_by_default(self):
+        args = intraday_cli.parse_args([])
+
+        self.assertEqual(args.history_db, Path("output/history/radar.db"))
+    def test_parse_args_rejects_non_positive_top(self):
+        for value in ("0", "-1"):
+            with self.subTest(value=value):
+                with self.assertRaises(SystemExit):
+                    intraday_cli.parse_args(["--top", value])
+
 
 if __name__ == "__main__":
     unittest.main()

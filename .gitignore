@@ -8,3 +8,4 @@ __pycache__/
 output/*.csv
 output/*.html
 output/state/
+output/history/

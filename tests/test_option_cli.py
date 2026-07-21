@@ -1,6 +1,9 @@
+import os
+import sqlite3
 import sys
 import tempfile
 import unittest
+from datetime import datetime
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -15,6 +18,11 @@ import option_cli  # noqa: E402
 
 
 class OptionCliTests(unittest.TestCase):
+    def test_parse_args_supports_option_history_database(self):
+        args = option_cli.parse_args(["--history-db", "output/history/custom-options.db"])
+
+        self.assertEqual(args.history_db, Path("output/history/custom-options.db"))
+
     def test_builds_compact_chinese_signal_table(self):
         source = pd.DataFrame([{
             "code": "cu2608C106000", "name": "沪铜2608购106000",
@@ -151,7 +159,7 @@ class OptionCliTests(unittest.TestCase):
             snapshot_path = Path(directory) / "options_candidates_latest.csv"
             filtered_path = Path(directory) / "options_latest.csv"
             argv = [
-                "--new-only", "--state-file", str(state_path),
+                "--new-only", "--no-history", "--state-file", str(state_path),
                 "--snapshot-csv", str(snapshot_path),
                 "--filtered-csv", str(filtered_path),
             ]
@@ -171,6 +179,89 @@ class OptionCliTests(unittest.TestCase):
             self.assertEqual(snapshot["code"].tolist(), ["A", "B"])
             self.assertEqual(filtered["code"].tolist(), ["A"])
             self.assertNotIn(0, filtered["confirmation_score"].tolist())
+
+    def test_main_saves_complete_candidate_snapshot_before_mode_filtering(self):
+        source = pd.DataFrame([{
+            "code": "A", "name": "A", "exchange": "SHFE",
+            "bar_time": pd.Timestamp("2026-07-20 10:00"),
+            "underlying": "au2608", "option_type": "CALL", "dte": 7,
+            "expiry": "2026-07-27", "strike": 100.0, "last_price": 2.0,
+            "moneyness": 0.01, "recent_volume": 1000.0, "open_interest": 500.0,
+            "signal_score": 0, "confirmation_score": 0,
+            "ma_bullish": False, "macd_bullish": False,
+            "double_confirmed": False, "ma_direction_confirmed": False,
+            "macd_direction_confirmed": False, "ma_cross_time": None,
+            "macd_cross_time": None, "ma_cross_bars_ago": None,
+            "macd_cross_bars_ago": None,
+        }])
+        with tempfile.TemporaryDirectory() as directory:
+            history_path = Path(directory) / "options.db"
+            with patch.object(option_cli, "QuoteClient", return_value=object()), \
+                 patch.object(option_cli, "scan_near_expiry_options", return_value=source), \
+                 patch.dict("os.environ", {"WATCHMAN_LOGICAL_SLOT": "2026-07-20T10:05:00+08:00"}):
+                code = option_cli.main(["--history-db", str(history_path)])
+
+            self.assertEqual(code, 0)
+            from option_history_store import load_option_history
+            history = load_option_history(history_path)
+            self.assertEqual(history["code"].tolist(), ["A"])
+            self.assertEqual(history["scan_time"].dt.strftime("%H:%M").tolist(), ["10:05"])
+
+    def test_main_uses_scheduler_logical_slot_as_scanner_now(self):
+        logical_slot = "2026-07-20T10:05:00+08:00"
+        with patch.object(option_cli, "QuoteClient", return_value=object()), \
+             patch.object(
+                 option_cli, "scan_near_expiry_options", return_value=pd.DataFrame()
+             ) as scanner, patch.dict(
+                 os.environ, {"WATCHMAN_LOGICAL_SLOT": logical_slot}, clear=True
+             ):
+            code = option_cli.main(["--no-history"])
+
+        self.assertEqual(code, 0)
+        self.assertEqual(scanner.call_args.kwargs["now"], pd.Timestamp(logical_slot))
+
+    def test_main_empty_manual_scan_replaces_current_shanghai_hour_and_confirms_save(self):
+        with tempfile.TemporaryDirectory() as directory:
+            history_path = Path(directory) / "options.db"
+            scan_time = "2026-07-20T10:00:00+08:00"
+            with sqlite3.connect(history_path) as connection:
+                connection.execute(
+                    "CREATE TABLE option_scans (scan_time TEXT PRIMARY KEY)"
+                )
+                connection.execute(
+                    "CREATE TABLE option_snapshots ("
+                    "scan_time TEXT NOT NULL, code TEXT NOT NULL, "
+                    "PRIMARY KEY (scan_time, code))"
+                )
+                connection.execute(
+                    "INSERT INTO option_scans(scan_time) VALUES (?)", (scan_time,)
+                )
+                connection.execute(
+                    "INSERT INTO option_snapshots(scan_time, code) VALUES (?, ?)",
+                    (scan_time, "stale"),
+                )
+            output = StringIO()
+            fixed_now = datetime.fromisoformat("2026-07-20T10:47:31+08:00")
+            with patch.object(option_cli, "QuoteClient", return_value=object()), \
+                 patch.object(
+                     option_cli, "scan_near_expiry_options", return_value=pd.DataFrame()
+                 ), patch.object(option_cli, "datetime", create=True) as clock, \
+                 patch.dict(os.environ, {}, clear=True), redirect_stdout(output):
+                clock.now.return_value = fixed_now
+                code = option_cli.main(["--history-db", str(history_path)])
+
+            self.assertEqual(code, 0)
+            with sqlite3.connect(history_path) as connection:
+                rows = connection.execute(
+                    "SELECT scan_time, code FROM option_snapshots"
+                ).fetchall()
+                scans = connection.execute(
+                    "SELECT scan_time FROM option_scans"
+                ).fetchall()
+            self.assertEqual(rows, [])
+            self.assertEqual(scans, [(scan_time,)])
+            self.assertIn("历史快照已保存", output.getvalue())
+            self.assertIn("（0条）", output.getvalue())
 
 
 if __name__ == "__main__":

@@ -6,12 +6,14 @@ import csv
 import math
 import sqlite3
 from datetime import datetime
+from numbers import Real
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 
 from momentum_history_store import load_momentum_history, summarize_momentum_changes
+from option_history_store import load_option_history, summarize_option_changes
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 DATA_FILES = {
@@ -22,6 +24,7 @@ DATA_FILES = {
 }
 SCHEDULER_DB = Path("output/scheduler/runs.db")
 MOMENTUM_HISTORY_DB = Path("output/history/momentum.db")
+OPTION_HISTORY_DB = Path("output/history/options.db")
 
 
 def _coerce(value: str):
@@ -79,11 +82,18 @@ def _dataframe_records(frame: pd.DataFrame) -> list[dict]:
             if value is None or pd.isna(value):
                 item[key] = None
             elif isinstance(value, pd.Timestamp):
-                item[key] = value.date().isoformat()
-            elif hasattr(value, "item"):
-                item[key] = value.item()
+                item[key] = (
+                    value.isoformat(timespec="seconds")
+                    if key in {"scan_time", "bar_time", "ma_cross_time", "macd_cross_time"}
+                    else value.date().isoformat()
+                )
             else:
-                item[key] = value
+                scalar = value.item() if hasattr(value, "item") else value
+                item[key] = (
+                    None
+                    if isinstance(scalar, Real) and not math.isfinite(float(scalar))
+                    else scalar
+                )
         records.append(item)
     return records
 
@@ -169,6 +179,9 @@ def build_dashboard_payload(root: Path, now: datetime | None = None) -> dict:
     momentum_history = _dataframe_records(summarize_momentum_changes(
         load_momentum_history(root / MOMENTUM_HISTORY_DB)
     ))
+    option_history = _dataframe_records(summarize_option_changes(
+        load_option_history(root / OPTION_HISTORY_DB)
+    ))
     files = {
         name: _file_status(
             root, DATA_FILES[name], len(rows), current, data_errors[name]
@@ -191,10 +204,12 @@ def build_dashboard_payload(root: Path, now: datetime | None = None) -> dict:
             "momentum_count": len(datasets["momentum"]),
             "sector_count": len(datasets["sectors"]),
             "momentum_history_count": len(momentum_history),
+            "option_history_count": len(option_history),
             "failed_tasks": failed_tasks,
         },
         "files": files,
         "tasks": tasks,
         "momentum_history": momentum_history,
+        "option_history": option_history,
         **datasets,
     }

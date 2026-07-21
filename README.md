@@ -221,6 +221,20 @@ export QUOTE_API_KEY='你的 Access Key'
 
 历史数据库、WAL文件和状态文件都位于已忽略的运行产物目录，不会提交到Git。
 
+### 期权信号小时历史
+
+期权扫描默认把模式过滤前的完整候选池写入 `output/history/options.db`，因此历史库同时保留双确认和未确认候选，不会因当前 `--mode` 丢失信号生命周期。调度器的逻辑时点作为扫描唯一键；同一时点重跑会事务性完整替换，空候选扫描也会留存扫描时点，以便正确识别上一轮合约“移出候选”。
+
+```bash
+.venv/bin/python option_cli.py \
+  --mode double \
+  --history-db output/history/options.db
+
+.venv/bin/python option_cli.py --mode double --no-history
+```
+
+Dashboard 的“期权变化”页面对比最近两个完整扫描时点，展示 `新晋双确认`、`双确认持续`、`双确认失效`、`信号增强`、`信号减弱`、`新候选`、`状态不变` 和 `移出候选`。其中确认分变化是当前确认分减去上一扫描确认分；首次出现和移出候选没有可比变化值。
+
 ## 交易时段感知自动调度器
 
 调度器会按上海时区运行三项任务，并以“任务 + 逻辑时点”在SQLite中去重：
@@ -273,7 +287,7 @@ export QUOTE_API_KEY='你的 Access Key'
 
 ## HTML功能面板
 
-项目提供零新增依赖的只读Web面板，聚合盘中成交额、期权信号、品种动量、板块动量、数据新鲜度与自动任务状态。面板每30秒自动刷新，支持手工刷新、功能页切换、代码/名称/板块/交易所搜索和桌面/移动端响应式布局。
+项目提供零新增依赖的只读Web面板，聚合盘中成交额、期权信号、期权信号变化、品种动量、板块动量、日频排名变化、数据新鲜度与自动任务状态。面板每30秒自动刷新，支持手工刷新、功能页切换、代码/名称/板块/交易所搜索和桌面/移动端响应式布局。
 
 ```bash
 cd /root/watchman
@@ -294,6 +308,8 @@ ssh -L 8787:127.0.0.1:8787 user@server
 - `output/options_latest.csv`
 - `output/momentum_latest.csv`
 - `output/sector_momentum_latest.csv`
+- `output/history/options.db`
+- `output/history/momentum.db`
 - `output/scheduler/runs.db`
 
 上述文件尚未生成时，面板会显示等待状态而不是启动失败。

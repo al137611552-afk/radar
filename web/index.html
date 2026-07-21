@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>Watchman · 期货监控台</title>
-  <link rel="stylesheet" href="/assets/dashboard.css?v=20260721-7">
-  <script src="/assets/dashboard.js?v=20260721-7" defer></script>
+  <link rel="stylesheet" href="/assets/dashboard.css?v=20260721-8">
+  <script src="/assets/dashboard.js?v=20260721-8" defer></script>
 </head>
 <body>
   <div class="app-shell">
@@ -19,10 +19,11 @@
         <button class="nav-item active" data-panel="overview"><span>01</span>总览</button>
         <button class="nav-item" data-panel="intraday"><span>02</span>盘中雷达</button>
         <button class="nav-item" data-panel="options"><span>03</span>期权信号</button>
-        <button class="nav-item" data-panel="momentum"><span>04</span>动量排名</button>
-        <button class="nav-item" data-panel="sectors"><span>05</span>板块动量</button>
-        <button class="nav-item" data-panel="history"><span>06</span>排名变化</button>
-        <button class="nav-item" data-panel="tasks"><span>07</span>任务状态</button>
+        <button class="nav-item" data-panel="option-history"><span>04</span>期权变化</button>
+        <button class="nav-item" data-panel="momentum"><span>05</span>动量排名</button>
+        <button class="nav-item" data-panel="sectors"><span>06</span>板块动量</button>
+        <button class="nav-item" data-panel="history"><span>07</span>排名变化</button>
+        <button class="nav-item" data-panel="tasks"><span>08</span>任务状态</button>
       </nav>
       <div class="sidebar-foot">
         <div class="connection"><span id="connection-dot"></span><b id="connection-text">连接中</b></div>
@@ -79,6 +80,11 @@
       <section class="panel" data-panel="options">
         <div class="section-intro"><div><p class="eyebrow">DOUBLE CONFIRMATION</p><h2>临期期权信号</h2><p>期权技术信号与标的趋势双确认，聚焦流动性合格的近平值合约。</p></div><span id="options-meta" class="count-badge">0 信号</span></div>
         <article class="table-card"><div class="table-scroll"><table><thead><tr><th>期权合约</th><th>类型</th><th>DTE</th><th>标的</th><th>行权价</th><th>最新价</th><th>期权分 / 确认分</th><th>成交量</th><th>持仓量</th><th>K线时间</th></tr></thead><tbody id="options-table"></tbody></table></div></article>
+      </section>
+
+      <section class="panel" data-panel="option-history">
+        <div class="section-intro"><div><p class="eyebrow">HOURLY SIGNAL LIFECYCLE</p><h2>期权信号变化</h2><p>对比最近两个完整扫描时点，识别新晋双确认、确认失效、信号增强减弱和移出候选。</p></div><span id="option-history-meta" class="count-badge">0 合约</span></div>
+        <article class="table-card"><div class="table-scroll"><table><thead><tr><th>扫描时间</th><th>期权合约</th><th>状态</th><th>类型</th><th>DTE</th><th>标的</th><th>确认分</th><th>变化</th><th>双确认</th><th>最新价</th><th>成交量</th><th>持仓量</th><th>K线时间</th></tr></thead><tbody id="option-history-table"></tbody></table></div></article>
       </section>
 
       <section class="panel" data-panel="momentum">

@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import os
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
 from atomic_io import atomic_to_csv
+from option_history_store import save_option_snapshot
 from option_scanner import scan_near_expiry_options
 from quote_api import QuoteClient
 from signal_state import diff_signals, load_state, save_state
@@ -17,6 +21,7 @@ SIGNAL_FINGERPRINT_FIELDS = (
     "ma_cross_time", "macd_cross_time", "double_confirmed",
     "ma_direction_confirmed", "macd_direction_confirmed",
 )
+SHANGHAI = ZoneInfo("Asia/Shanghai")
 
 
 def _signal_label(bullish, bars_ago):
@@ -141,18 +146,45 @@ def parse_args(argv=None):
         help="保存经过模式过滤、但未经过增量过滤的当前有效信号",
     )
     parser.add_argument("--csv", type=Path)
+    parser.add_argument(
+        "--history-db", type=Path,
+        default=Path("output/history/options.db"),
+        help="保存完整候选池的SQLite小时快照",
+    )
+    parser.add_argument(
+        "--no-history", action="store_true",
+        help="本轮不写入SQLite历史快照",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv=None):
     args = parse_args(argv)
-    snapshot = scan_near_expiry_options(
-        QuoteClient(), min_dte=args.min_dte, max_dte=args.max_dte,
-        strikes_per_side=args.strikes, max_moneyness=args.max_moneyness,
-        min_volume=args.min_volume, min_open_interest=args.min_open_interest,
-    )
+    logical_slot = os.environ.get("WATCHMAN_LOGICAL_SLOT")
+    scan_kwargs = {
+        "min_dte": args.min_dte,
+        "max_dte": args.max_dte,
+        "strikes_per_side": args.strikes,
+        "max_moneyness": args.max_moneyness,
+        "min_volume": args.min_volume,
+        "min_open_interest": args.min_open_interest,
+    }
+    if logical_slot:
+        scan_kwargs["now"] = pd.Timestamp(logical_slot)
+    snapshot = scan_near_expiry_options(QuoteClient(), **scan_kwargs)
     if args.snapshot_csv:
         atomic_to_csv(snapshot, args.snapshot_csv, index=False, encoding="utf-8-sig")
+    history_count = 0
+    if not args.no_history:
+        if not logical_slot and snapshot.empty:
+            logical_slot = datetime.now(SHANGHAI).replace(
+                minute=0, second=0, microsecond=0
+            )
+        history_count = save_option_snapshot(
+            args.history_db,
+            snapshot,
+            scan_time=logical_slot,
+        )
     filtered = filter_signal_mode(snapshot, args.mode)
     matched_count = len(filtered)
     if args.filtered_csv:
@@ -169,6 +201,8 @@ def main(argv=None):
     if args.new_only:
         summary += f"；新增或变化 {len(filtered)} 个"
     print(summary)
+    if not args.no_history:
+        print(f"历史快照已保存：{args.history_db}（{history_count}条）")
     if filtered.empty:
         print(
             "当前没有新增或变化的信号。" if args.new_only

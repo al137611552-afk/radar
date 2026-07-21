@@ -18,9 +18,50 @@ sys.path.insert(0, str(ROOT))
 import dashboard  # noqa: E402
 import dashboard_cli  # noqa: E402
 from momentum_history_store import save_momentum_snapshot  # noqa: E402
+from option_history_store import save_option_snapshot  # noqa: E402
 
 
 class DashboardDataTests(unittest.TestCase):
+    def test_dataframe_records_normalizes_all_non_finite_floats(self):
+        frame = pd.DataFrame({
+            "value": [float("nan"), float("inf"), float("-inf"), 1.5]
+        })
+
+        records = dashboard._dataframe_records(frame)
+
+        self.assertEqual(records, [
+            {"value": None}, {"value": None}, {"value": None}, {"value": 1.5}
+        ])
+        json.dumps(records, allow_nan=False)
+
+    def test_snapshot_exposes_hourly_option_signal_lifecycle(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "output/history/options.db"
+            base = {
+                "code": "auC1", "name": "黄金购", "exchange": "SHFE",
+                "bar_time": pd.Timestamp("2026-07-20 10:00"),
+                "underlying": "au2608", "option_type": "CALL", "dte": 7,
+                "expiry": "2026-07-27", "strike": 800.0, "last_price": 10.0,
+                "moneyness": 0.01, "recent_volume": 1000.0, "open_interest": 500.0,
+                "signal_score": 3, "confirmation_score": 4,
+                "ma_bullish": True, "macd_bullish": False,
+                "double_confirmed": False, "ma_direction_confirmed": False,
+                "macd_direction_confirmed": False, "ma_cross_time": None,
+                "macd_cross_time": None,
+            }
+            first = pd.DataFrame([base])
+            latest = pd.DataFrame([{**base, "double_confirmed": True,
+                                    "ma_direction_confirmed": True}])
+            save_option_snapshot(path, first, scan_time="2026-07-20T10:05:00+08:00")
+            save_option_snapshot(path, latest, scan_time="2026-07-20T11:05:00+08:00")
+
+            payload = dashboard.build_dashboard_payload(root)
+
+            self.assertEqual(payload["summary"]["option_history_count"], 1)
+            self.assertEqual(payload["option_history"][0]["change_status"], "新晋双确认")
+            json.dumps(payload, ensure_ascii=False, allow_nan=False)
+
     def test_snapshot_exposes_daily_momentum_rank_changes(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -231,8 +272,14 @@ class DashboardAssetTests(unittest.TestCase):
         script = (ROOT / "web/assets/dashboard.js").read_text(encoding="utf-8")
         stylesheet = (ROOT / "web/assets/dashboard.css").read_text(encoding="utf-8")
 
-        for panel in ("overview", "intraday", "options", "momentum", "sectors", "history", "tasks"):
+        for panel in (
+            "overview", "intraday", "options", "option-history", "momentum",
+            "sectors", "history", "tasks",
+        ):
             self.assertIn(f'data-panel="{panel}"', index)
+        self.assertIn('id="option-history-table"', index)
+        self.assertIn("function renderOptionHistory()", script)
+        self.assertIn("change_status", script)
         self.assertIn('id="momentum-history-table"', index)
         self.assertIn("function renderMomentumHistory()", script)
         self.assertIn("long_rank_change", script)
@@ -264,8 +311,8 @@ class DashboardAssetTests(unittest.TestCase):
         self.assertIn('directionalRows(rows, "short_rank")', script)
         self.assertIn('directionalRows(rows, "risk_long_rank")', script)
         self.assertIn('directionalRows(rows, "risk_short_rank")', script)
-        self.assertIn('/assets/dashboard.css?v=20260721-7', index)
-        self.assertIn('/assets/dashboard.js?v=20260721-7', index)
+        self.assertIn('/assets/dashboard.css?v=20260721-8', index)
+        self.assertIn('/assets/dashboard.js?v=20260721-8', index)
         self.assertIn(".table-card>.card-head{padding:", stylesheet)
         self.assertIn(".table-card+.table-card{margin-top:", stylesheet)
         self.assertIn(".risk-badge.high{", stylesheet)

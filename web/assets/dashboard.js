@@ -5,6 +5,7 @@ const titles = {
   overview: "市场总览",
   intraday: "盘中成交额雷达",
   options: "临期期权信号",
+  "option-history": "期权信号变化",
   momentum: "商品动量排名",
   sectors: "板块动量排名",
   history: "日频排名变化",
@@ -91,6 +92,7 @@ function renderSummary() {
   const cards = [
     ["盘中合约", summary.intraday_count, "完整5分钟横截面", "purple"],
     ["期权信号", summary.option_count, "临期双确认候选", "red"],
+    ["期权变化", summary.option_history_count, "最近小时信号生命周期", "purple"],
     ["动量品种", summary.momentum_count, "多周期商品指数", "green"],
     ["动量板块", summary.sector_count, "等权板块强弱", "purple"],
     ["排名历史", summary.momentum_history_count, "最近交易日变化", "green"],
@@ -208,6 +210,37 @@ function renderOptions() {
   }));
 }
 
+function renderOptionHistory() {
+  const rows = (state.data.option_history || []).filter(matches);
+  $("#option-history-meta").textContent = `${rows.length} 合约`;
+  const statusKind = (status) => {
+    if (status === "新晋双确认" || status === "信号增强") return "long";
+    if (status === "双确认失效" || status === "信号减弱" || status === "移出候选") return "short";
+    return "flat";
+  };
+  $("#option-history-table").replaceChildren(...rows.map((item) => {
+    const row = node("tr");
+    addCell(row, value(item.scan_time), "number muted");
+    const instrumentCell = node("td");
+    const instrument = node("div", "instrument");
+    instrument.append(node("strong", "", value(item.name, item.code)), node("small", "", `${value(item.code)} · ${value(item.exchange)}`));
+    instrumentCell.append(instrument); row.append(instrumentCell);
+    const statusCell = node("td"); statusCell.append(badge(value(item.change_status), statusKind(item.change_status))); row.append(statusCell);
+    const typeCell = node("td"); typeCell.append(item.option_type === "PUT" ? badge("PUT", "put", "type-badge") : badge("CALL", "call", "type-badge")); row.append(typeCell);
+    addCell(row, value(item.dte), "number");
+    addCell(row, value(item.underlying));
+    addCell(row, number(item.confirmation_score, 0), "score");
+    const change = Number(item.confirmation_score_change);
+    addCell(row, Number.isFinite(change) ? `${change > 0 ? "+" : ""}${change}` : "—", `number ${trendClass(item.confirmation_score_change)}`);
+    const confirmedCell = node("td"); confirmedCell.append(badge(item.double_confirmed ? "是" : "否", item.double_confirmed ? "long" : "flat")); row.append(confirmedCell);
+    addCell(row, number(item.last_price), "number");
+    addCell(row, integer(item.recent_volume), "number");
+    addCell(row, integer(item.open_interest), "number");
+    addCell(row, value(item.bar_time), "number muted");
+    return row;
+  }));
+}
+
 function finiteRank(input) {
   if (input === null || input === undefined || input === "") return Number.POSITIVE_INFINITY;
   const parsed = Number(input);
@@ -313,7 +346,7 @@ function renderTasks() {
 
 function renderTables() {
   if (!state.data) return;
-  renderIntraday(); renderOptions(); renderMomentum(); renderSectors(); renderMomentumHistory(); renderTasks();
+  renderIntraday(); renderOptions(); renderOptionHistory(); renderMomentum(); renderSectors(); renderMomentumHistory(); renderTasks();
 }
 
 function renderAll() {

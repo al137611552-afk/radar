@@ -20,7 +20,8 @@
         <button class="nav-item" data-panel="intraday"><span>02</span>盘中雷达</button>
         <button class="nav-item" data-panel="options"><span>03</span>期权信号</button>
         <button class="nav-item" data-panel="momentum"><span>04</span>动量排名</button>
-        <button class="nav-item" data-panel="tasks"><span>05</span>任务状态</button>
+        <button class="nav-item" data-panel="sectors"><span>05</span>板块动量</button>
+        <button class="nav-item" data-panel="tasks"><span>06</span>任务状态</button>
       </nav>
       <div class="sidebar-foot">
         <div class="connection"><span id="connection-dot"></span><b id="connection-text">连接中</b></div>
@@ -37,7 +38,7 @@
         <div class="top-actions">
           <label class="search-wrap">
             <span aria-hidden="true">⌕</span>
-            <input id="global-search" type="search" placeholder="搜索代码、名称或交易所" autocomplete="off">
+            <input id="global-search" type="search" placeholder="搜索代码、名称、板块或交易所" autocomplete="off">
           </label>
           <button id="refresh-button" class="refresh-button" type="button"><span>↻</span>刷新</button>
         </div>
@@ -81,7 +82,12 @@
 
       <section class="panel" data-panel="momentum">
         <div class="section-intro"><div><p class="eyebrow">CROSS-SECTIONAL MOMENTUM</p><h2>商品动量排名</h2><p>多周期横截面强弱评分，辅助识别趋势领先与落后品种。</p></div><span id="momentum-meta" class="count-badge">0 品种</span></div>
-        <article class="table-card"><div class="table-scroll"><table><thead><tr><th>排名</th><th>品种</th><th>综合分</th><th>5日</th><th>20日</th><th>60日</th><th>120日</th><th>交易所</th><th>日期</th></tr></thead><tbody id="momentum-table"></tbody></table></div></article>
+        <article class="table-card"><div class="table-scroll"><table><thead><tr><th>排名</th><th>品种</th><th>板块</th><th>综合分</th><th>5日</th><th>20日</th><th>20日板块超额</th><th>60日</th><th>120日</th><th>交易所</th><th>日期</th></tr></thead><tbody id="momentum-table"></tbody></table></div></article>
+      </section>
+
+      <section class="panel" data-panel="sectors">
+        <div class="section-intro"><div><p class="eyebrow">SECTOR RELATIVE STRENGTH</p><h2>板块动量排名</h2><p>按板块有效成分等权聚合多周期收益，识别市场主线与板块轮动。</p></div><span id="sectors-meta" class="count-badge">0 板块</span></div>
+        <article class="table-card"><div class="table-scroll"><table><thead><tr><th>排名</th><th>板块</th><th>成分数</th><th>板块动量分</th><th>5日</th><th>20日</th><th>60日</th><th>120日</th><th>日期</th></tr></thead><tbody id="sectors-table"></tbody></table></div></article>
       </section>
 
       <section class="panel" data-panel="tasks">

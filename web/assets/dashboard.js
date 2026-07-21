@@ -6,6 +6,7 @@ const titles = {
   intraday: "盘中成交额雷达",
   options: "临期期权信号",
   momentum: "商品动量排名",
+  sectors: "板块动量排名",
   tasks: "自动任务状态",
 };
 
@@ -85,6 +86,7 @@ function renderSummary() {
     ["盘中合约", summary.intraday_count, "完整5分钟横截面", "purple"],
     ["期权信号", summary.option_count, "临期双确认候选", "red"],
     ["动量品种", summary.momentum_count, "多周期商品指数", "green"],
+    ["动量板块", summary.sector_count, "等权板块强弱", "purple"],
     ["失败任务", summary.failed_tasks, summary.health === "healthy" ? "调度链路正常" : "需要检查日志", summary.failed_tasks ? "red" : "green"],
   ];
   const target = $("#summary-cards");
@@ -140,14 +142,14 @@ function overviewSignals(targetSelector, rows, type) {
     top.append(node("strong", "", value(row.name, row.code)), node("span", "score", type === "option" ? value(row.signal_score) : number(row.momentum_score, 1)));
     const detail = type === "option"
       ? `${value(row.option_type)} · DTE ${value(row.dte)} · ${value(row.underlying)}`
-      : `5日 ${percent(row.return_5d)} · 20日 ${percent(row.return_20d)}`;
+      : `${value(row.sector)} · 5日 ${percent(row.return_5d)} · 20日 ${percent(row.return_20d)}`;
     item.append(top, node("p", "", detail));
     return item;
   }));
 }
 
 function renderFreshness() {
-  const labels = { intraday: "盘中雷达", options: "期权信号", momentum: "动量排名" };
+  const labels = { intraday: "盘中雷达", options: "期权信号", momentum: "动量排名", sectors: "板块动量" };
   $("#freshness-grid").replaceChildren(...Object.entries(state.data.files).map(([key, file]) => {
     const item = node("div", "fresh-item");
     const status = !file.exists ? "尚无文件" : !file.available ? "读取失败" : age(file.age_seconds);
@@ -204,9 +206,27 @@ function renderMomentum() {
   $("#momentum-table").replaceChildren(...rows.map((item, index) => {
     const row = node("tr"); addCell(row, String(index + 1).padStart(2, "0"), "rank");
     const instrumentCell = node("td"); const instrument = node("div", "instrument"); instrument.append(node("strong", "", value(item.name, item.code)), node("small", "", value(item.code))); instrumentCell.append(instrument); row.append(instrumentCell);
+    addCell(row, value(item.sector));
     addCell(row, number(item.momentum_score, 1), "score");
-    ["return_5d", "return_20d", "return_60d", "return_120d"].forEach((key) => addCell(row, percent(item[key]), `number ${trendClass(item[key])}`));
+    ["return_5d", "return_20d"].forEach((key) => addCell(row, percent(item[key]), `number ${trendClass(item[key])}`));
+    addCell(row, percent(item.sector_excess_20d), `number ${trendClass(item.sector_excess_20d)}`);
+    ["return_60d", "return_120d"].forEach((key) => addCell(row, percent(item[key]), `number ${trendClass(item[key])}`));
     addCell(row, value(item.exchange)); addCell(row, value(item.as_of), "number muted"); return row;
+  }));
+}
+
+function renderSectors() {
+  const rows = state.data.sectors.filter(matches);
+  $("#sectors-meta").textContent = `${rows.length} 板块`;
+  $("#sectors-table").replaceChildren(...rows.map((item, index) => {
+    const row = node("tr");
+    addCell(row, String(index + 1).padStart(2, "0"), "rank");
+    addCell(row, value(item.sector));
+    addCell(row, integer(item.constituents), "number");
+    addCell(row, number(item.sector_momentum_score, 1), "score");
+    ["sector_return_5d", "sector_return_20d", "sector_return_60d", "sector_return_120d"].forEach((key) => addCell(row, percent(item[key]), `number ${trendClass(item[key])}`));
+    addCell(row, value(item.as_of), "number muted");
+    return row;
   }));
 }
 
@@ -226,7 +246,7 @@ function renderTasks() {
 
 function renderTables() {
   if (!state.data) return;
-  renderIntraday(); renderOptions(); renderMomentum(); renderTasks();
+  renderIntraday(); renderOptions(); renderMomentum(); renderSectors(); renderTasks();
 }
 
 function renderAll() {

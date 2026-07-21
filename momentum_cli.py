@@ -8,25 +8,30 @@ import pandas as pd
 
 from atomic_io import atomic_to_csv
 from quote_api import QuoteClient
-from ranking import generate_ranking
+from ranking import build_sector_ranking, generate_ranking
 
 DEFAULT_HORIZONS = (5, 20, 60, 120)
 
 
 def build_display_table(result: pd.DataFrame, horizons=DEFAULT_HORIZONS):
-    columns = ["code", "name", "as_of"]
+    columns = ["code", "name", "sector", "as_of"]
     names = {
-        "code": "代码", "name": "名称", "as_of": "数据截止",
+        "code": "代码", "name": "名称", "sector": "板块", "as_of": "数据截止",
         "momentum_score": "综合动量分",
     }
     for horizon in horizons:
         columns.extend([
-            f"return_{horizon}d", f"excess_{horizon}d", f"rank_{horizon}d"
+            f"return_{horizon}d", f"excess_{horizon}d", f"rank_{horizon}d",
+            f"sector_return_{horizon}d", f"sector_excess_{horizon}d",
+            f"sector_rank_{horizon}d",
         ])
         names.update({
             f"return_{horizon}d": f"{horizon}日收益%",
-            f"excess_{horizon}d": f"{horizon}日超额%",
+            f"excess_{horizon}d": f"{horizon}日全商品超额%",
             f"rank_{horizon}d": f"{horizon}日排名",
+            f"sector_return_{horizon}d": f"{horizon}日板块收益%",
+            f"sector_excess_{horizon}d": f"{horizon}日板块超额%",
+            f"sector_rank_{horizon}d": f"{horizon}日板块排名",
         })
     columns.append("momentum_score")
     display = result.loc[:, columns].rename(columns=names).copy()
@@ -37,6 +42,32 @@ def build_display_table(result: pd.DataFrame, horizons=DEFAULT_HORIZONS):
         if "收益%" in column or "超额%" in column or column == "综合动量分"
     ]
     display[percent_columns] = display[percent_columns].round(2)
+    return display
+
+
+def build_sector_display_table(result: pd.DataFrame, horizons=DEFAULT_HORIZONS):
+    columns = ["sector", "constituents", "as_of"]
+    names = {
+        "sector": "板块", "constituents": "品种数", "as_of": "数据截止",
+        "sector_momentum_score": "板块动量分",
+    }
+    for horizon in horizons:
+        columns.extend([
+            f"sector_return_{horizon}d", f"sector_rank_{horizon}d"
+        ])
+        names.update({
+            f"sector_return_{horizon}d": f"{horizon}日板块收益%",
+            f"sector_rank_{horizon}d": f"{horizon}日板块排名",
+        })
+    columns.append("sector_momentum_score")
+    display = result.loc[:, columns].rename(columns=names).copy()
+    display["数据截止"] = pd.to_datetime(display["数据截止"]).dt.strftime("%Y-%m-%d")
+    float_columns = display.select_dtypes(include="number").columns
+    rounded = [
+        column for column in float_columns
+        if "收益%" in column or column == "板块动量分"
+    ]
+    display[rounded] = display[rounded].round(2)
     return display
 
 
@@ -55,6 +86,7 @@ def main(argv=None):
         help="回看交易日周期，默认5,20,60,120",
     )
     parser.add_argument("--csv", help="可选：保存完整排名CSV的路径")
+    parser.add_argument("--sector-csv", help="可选：保存板块动量榜CSV的路径")
     args = parser.parse_args(argv)
 
     try:
@@ -65,15 +97,27 @@ def main(argv=None):
     if result.empty:
         print("没有足够数据生成排名。")
         return 1
+    sector_result = build_sector_ranking(result, args.horizons)
     if args.csv:
         atomic_to_csv(result, args.csv, index=False, encoding="utf-8-sig")
+    if args.sector_csv:
+        atomic_to_csv(
+            sector_result, args.sector_csv, index=False, encoding="utf-8-sig"
+        )
     display = build_display_table(result, args.horizons)
     if args.top > 0:
         display = display.head(args.top)
     print(display.to_string(index=False))
-    print(f"\n有效商品品种：{len(result)}；超额收益基准：当前有效品种等权平均。")
+    print("\n板块动量榜：")
+    print(build_sector_display_table(sector_result, args.horizons).to_string(index=False))
+    print(
+        f"\n有效商品品种：{len(result)}；板块：{len(sector_result)}；"
+        "全商品与板块基准均为当前有效成分等权平均。"
+    )
     if args.csv:
         print(f"完整结果已保存：{args.csv}")
+    if args.sector_csv:
+        print(f"板块结果已保存：{args.sector_csv}")
     return 0
 
 

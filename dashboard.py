@@ -14,6 +14,7 @@ DATA_FILES = {
     "intraday": Path("output/intraday_latest.csv"),
     "options": Path("output/options_latest.csv"),
     "momentum": Path("output/momentum_latest.csv"),
+    "sectors": Path("output/sector_momentum_latest.csv"),
 }
 SCHEDULER_DB = Path("output/scheduler/runs.db")
 
@@ -163,6 +164,7 @@ def build_dashboard_payload(root: Path, now: datetime | None = None) -> dict:
             "intraday_count": len(datasets["intraday"]),
             "option_count": len(datasets["options"]),
             "momentum_count": len(datasets["momentum"]),
+            "sector_count": len(datasets["sectors"]),
             "failed_tasks": failed_tasks,
         },
         "files": files,

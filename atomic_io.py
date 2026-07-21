@@ -10,7 +10,10 @@ from pathlib import Path
 
 
 def _sync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    directory_flag = getattr(os, "O_DIRECTORY", None)
+    if directory_flag is None:
+        return
+    descriptor = os.open(path, os.O_RDONLY | directory_flag)
     try:
         os.fsync(descriptor)
     finally:
@@ -39,7 +42,7 @@ def atomic_to_csv(frame, target: str | Path, *, index: bool, encoding="utf-8-sig
     )
     temporary = Path(temporary_name)
     try:
-        if existing_mode is not None:
+        if existing_mode is not None and hasattr(os, "fchmod"):
             os.fchmod(descriptor, existing_mode)
         with os.fdopen(descriptor, "w", encoding=encoding, newline="") as handle:
             frame.to_csv(handle, index=index)

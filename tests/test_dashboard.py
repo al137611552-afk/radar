@@ -38,6 +38,11 @@ class DashboardDataTests(unittest.TestCase):
                 "rb6666,螺纹钢指数,2026-07-14,88.5,3.2,7.1\n",
                 encoding="utf-8",
             )
+            (output / "sector_momentum_latest.csv").write_text(
+                "sector,constituents,as_of,sector_return_5d,sector_momentum_score\n"
+                "黑色,10,2026-07-14,2.4,90.9\n",
+                encoding="utf-8",
+            )
             scheduler_db = output / "scheduler" / "runs.db"
             scheduler_db.parent.mkdir()
             with sqlite3.connect(scheduler_db) as connection:
@@ -68,9 +73,11 @@ class DashboardDataTests(unittest.TestCase):
             self.assertEqual(payload["summary"]["intraday_count"], 1)
             self.assertEqual(payload["summary"]["option_count"], 1)
             self.assertEqual(payload["summary"]["momentum_count"], 1)
+            self.assertEqual(payload["summary"]["sector_count"], 1)
             self.assertEqual(payload["intraday"][0]["turnover_15m_yi"], 12.5)
             self.assertEqual(payload["options"][0]["dte"], 12)
             self.assertEqual(payload["momentum"][0]["momentum_score"], 88.5)
+            self.assertEqual(payload["sectors"][0]["sector"], "黑色")
             self.assertEqual(payload["tasks"][0]["status"], "success")
             serialized = json.dumps(payload, ensure_ascii=False, allow_nan=False)
             self.assertNotIn("secret-123", serialized)
@@ -173,6 +180,7 @@ class DashboardDataTests(unittest.TestCase):
             self.assertEqual(payload["intraday"], [])
             self.assertEqual(payload["options"], [])
             self.assertEqual(payload["momentum"], [])
+            self.assertEqual(payload["sectors"], [])
             self.assertEqual(payload["tasks"], [])
             self.assertEqual(payload["summary"]["health"], "waiting")
 
@@ -183,8 +191,11 @@ class DashboardAssetTests(unittest.TestCase):
         script = (ROOT / "web/assets/dashboard.js").read_text(encoding="utf-8")
         stylesheet = (ROOT / "web/assets/dashboard.css").read_text(encoding="utf-8")
 
-        for panel in ("overview", "intraday", "options", "momentum", "tasks"):
+        for panel in ("overview", "intraday", "options", "momentum", "sectors", "tasks"):
             self.assertIn(f'data-panel="{panel}"', index)
+        self.assertIn('id="sectors-table"', index)
+        self.assertIn("function renderSectors()", script)
+        self.assertIn("sector_momentum_score", script)
         self.assertIn('id="global-search"', index)
         self.assertIn('id="refresh-button"', index)
         self.assertIn("/api/dashboard", script)

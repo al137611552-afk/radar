@@ -23,6 +23,8 @@ class SchedulerCliTests(unittest.TestCase):
         self.assertIn("output/intraday_latest.csv", handlers["intraday"].command)
         self.assertIn("output/options_latest.csv", handlers["options"].command)
         self.assertIn("output/momentum_latest.csv", handlers["momentum"].command)
+        self.assertIn("output/sector_momentum_latest.csv", handlers["momentum"].command)
+        self.assertEqual(handlers["momentum"].command[0], sys.executable)
 
     def test_once_executes_due_task_and_status_reports_success(self):
         calls = []

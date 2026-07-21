@@ -7,6 +7,8 @@ import re
 
 import pandas as pd
 
+from sectors import commodity_sector
+
 
 COMMODITY_EXCHANGES = frozenset({"SHFE", "DCE", "CZCE", "INE", "GFEX"})
 RETURN_INDEX_CODE = re.compile(r"^[A-Za-z]+6666$")
@@ -91,6 +93,7 @@ def build_momentum_ranking(
             "code": code,
             "name": info.get("name", code),
             "exchange": info.get("exchange_code", ""),
+            "sector": commodity_sector(code),
             "as_of": source["datetime"].iloc[-1] if "datetime" in source else pd.NaT,
         }
         for horizon in horizons:
@@ -99,10 +102,12 @@ def build_momentum_ranking(
             ) * 100
         rows.append(row)
 
-    return_columns = ["code", "name", "exchange", "as_of"]
+    return_columns = ["code", "name", "exchange", "sector", "as_of"]
     for horizon in horizons:
         return_columns.extend([
-            f"return_{horizon}d", f"excess_{horizon}d", f"rank_{horizon}d"
+            f"return_{horizon}d", f"excess_{horizon}d", f"rank_{horizon}d",
+            f"sector_return_{horizon}d", f"sector_excess_{horizon}d",
+            f"sector_rank_{horizon}d",
         ])
     return_columns.append("momentum_score")
     if not rows:
@@ -118,6 +123,15 @@ def build_momentum_ranking(
         result[rank_col] = result[return_col].rank(
             method="min", ascending=False
         ).astype(int)
+        sector_return_col = f"sector_return_{horizon}d"
+        sector_excess_col = f"sector_excess_{horizon}d"
+        sector_rank_col = f"sector_rank_{horizon}d"
+        grouped = result.groupby("sector", sort=False)[return_col]
+        result[sector_return_col] = grouped.transform("mean")
+        result[sector_excess_col] = result[return_col] - result[sector_return_col]
+        result[sector_rank_col] = grouped.rank(
+            method="min", ascending=False
+        ).astype(int)
         pct_col = f"_pct_{horizon}d"
         result[pct_col] = result[return_col].rank(pct=True)
         percentile_columns.append(pct_col)
@@ -128,3 +142,57 @@ def build_momentum_ranking(
         ascending=[False, False, True],
     ).reset_index(drop=True)
     return result[return_columns]
+
+
+def build_sector_ranking(
+    product_ranking: pd.DataFrame,
+    horizons: Sequence[int] = (5, 20, 60, 120),
+) -> pd.DataFrame:
+    """Aggregate product returns into an equal-weight sector momentum leaderboard."""
+    horizons = tuple(dict.fromkeys(int(value) for value in horizons))
+    if not horizons or any(value < 1 for value in horizons):
+        raise ValueError("horizons must contain positive integers")
+    columns = ["sector", "constituents", "as_of"]
+    for horizon in horizons:
+        columns.extend([f"sector_return_{horizon}d", f"sector_rank_{horizon}d"])
+    columns.append("sector_momentum_score")
+    if product_ranking.empty:
+        return pd.DataFrame(columns=columns)
+
+    required = {"sector", "code", "as_of"} | {
+        f"return_{horizon}d" for horizon in horizons
+    }
+    missing = sorted(required - set(product_ranking.columns))
+    if missing:
+        raise ValueError(f"product ranking missing columns: {', '.join(missing)}")
+
+    aggregations = {
+        "constituents": ("code", "nunique"),
+        "as_of": ("as_of", "max"),
+    }
+    for horizon in horizons:
+        aggregations[f"sector_return_{horizon}d"] = (
+            f"return_{horizon}d", "mean"
+        )
+    result = pd.DataFrame(
+        product_ranking.groupby("sector", as_index=False).agg(**aggregations)
+    )
+    percentile_columns = []
+    for horizon in horizons:
+        return_col = f"sector_return_{horizon}d"
+        rank_col = f"sector_rank_{horizon}d"
+        values = pd.Series(result.loc[:, return_col])
+        result.loc[:, rank_col] = values.rank(
+            method="min", ascending=False
+        ).astype(int)
+        pct_col = f"_pct_{horizon}d"
+        result.loc[:, pct_col] = values.rank(pct=True)
+        percentile_columns.append(pct_col)
+    result.loc[:, "sector_momentum_score"] = (
+        result.loc[:, percentile_columns].mean(axis=1) * 100
+    )
+    result = result.sort_values(
+        by=["sector_momentum_score", f"sector_return_{horizons[0]}d", "sector"],
+        ascending=[False, False, True],
+    ).reset_index(drop=True)
+    return result.loc[:, columns].copy()

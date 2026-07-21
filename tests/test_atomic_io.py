@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import atomic_io
 from atomic_io import atomic_to_csv
 
 
@@ -37,6 +38,14 @@ class _PausedFrame:
 
 
 class AtomicCsvTests(unittest.TestCase):
+    def test_directory_sync_is_a_noop_without_platform_directory_flag(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            atomic_io.os, "O_DIRECTORY", None
+        ), mock.patch("atomic_io.os.open") as open_mock:
+            atomic_io._sync_directory(Path(directory))
+
+        open_mock.assert_not_called()
+
     def test_new_snapshot_keeps_private_mkstemp_permissions_under_strict_umask(self):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "latest.csv"

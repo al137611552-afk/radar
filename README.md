@@ -1,6 +1,29 @@
-# Watchman 期货辅助工具（阶段 0）
+# Watchman 期货辅助决策 MVP
 
-当前已实现：商品多周期动量排名、临期期权与标的双确认扫描，以及国内商品主力合约的当日成交额热点雷达。
+当前 MVP 已实现：商品与板块多周期动量排名、相对全商品/所属板块超额收益、临期期权与标的双确认扫描、商品主力成交热点、5分钟盘中雷达、自动调度和只读 Web 功能面板。系统只提供研究与辅助决策信号，不连接交易或自动下单。
+
+## Windows 快速验收
+
+Windows 10/11 安装 Python 3.11 或更高版本并克隆仓库后，在项目目录打开 PowerShell。Access Key 只写入当前 PowerShell 进程，不要保存到仓库：
+
+```powershell
+$env:QUOTE_API_KEY = "你的 Access Key"
+powershell -ExecutionPolicy Bypass -File .\windows_mvp.ps1
+```
+
+脚本会创建 `.venv`、安装依赖，依次生成品种/板块动量、临期期权和盘中雷达快照，然后启动 `http://127.0.0.1:8787`。按 `Ctrl+C` 停止面板。首次依赖已安装后可跳过安装：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\windows_mvp.ps1 -SkipSetup
+```
+
+只查看已经生成的快照，不重新请求行情：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\windows_mvp.ps1 -SkipSetup -SkipScan
+```
+
+Windows MVP 验收项和已知边界见 `MVP_ACCEPTANCE.md`。
 
 ## 运行
 
@@ -27,11 +50,25 @@ export QUOTE_API_KEY='你的 Access Key'
 - 标的池：SHFE、DCE、CZCE、INE、GFEX 中 `variety_type=7` 且代码严格以 `6666` 结尾的正式商品收益率指数；自动排除测试代码和 CFFEX 金融期货。
 - N 日收益：`最新完整日线收盘 / N 个交易日前收盘 - 1`。
 - N 日超额：品种 N 日收益减去当前有效商品池的等权平均 N 日收益。
+- 板块基准：同板块当前有效品种 N 日收益的等权平均；品种板块超额为品种收益减去板块基准。
+- 板块内排名：同板块有效品种按对应周期收益降序排名。
+- 板块动量分：各板块5/20/60/120日等权收益在板块横截面中的百分位均值，范围0~100。
 - N 日排名：按 N 日收益降序排名。
 - 综合动量分：各周期横截面百分位的等权平均，范围 0~100。
 - 完整K线：交易日尚未结束时自动丢弃正在形成的日线；夜盘标记为下一交易日的部分K线也会被排除。
 
 注意：`6666` 指数的精确编制、换月和展期规则仍需数据接口管理员确认。当前结果适合作为研究/辅助决策信号，不构成投资建议。
+
+板块分类由 `sectors.py` 版本化维护，当前覆盖贵金属、有色金属、新能源材料、黑色、能源化工、油脂油料、谷物、软商品、畜牧、林产建材和航运。新增品种不会被静默丢弃，而会标记为“未分类”，便于数据质量检查。航运当前只有集运欧线一个有效成分，因此其板块收益等于品种收益、板块超额恒为0，不能与多成分板块作同等分散度解释。
+
+同时导出完整品种榜和板块榜：
+
+```bash
+.venv/bin/python momentum_cli.py \
+  --top 20 \
+  --csv output/momentum_latest.csv \
+  --sector-csv output/sector_momentum_latest.csv
+```
 
 ## 临期期权小时金叉扫描
 
@@ -217,7 +254,7 @@ export QUOTE_API_KEY='你的 Access Key'
 
 ## HTML功能面板
 
-项目提供零新增依赖的只读Web面板，聚合盘中成交额、期权信号、动量排名、数据新鲜度与自动任务状态。面板每30秒自动刷新，支持手工刷新、功能页切换、代码/名称/交易所搜索和桌面/移动端响应式布局。
+项目提供零新增依赖的只读Web面板，聚合盘中成交额、期权信号、品种动量、板块动量、数据新鲜度与自动任务状态。面板每30秒自动刷新，支持手工刷新、功能页切换、代码/名称/板块/交易所搜索和桌面/移动端响应式布局。
 
 ```bash
 cd /root/watchman
@@ -237,6 +274,7 @@ ssh -L 8787:127.0.0.1:8787 user@server
 - `output/intraday_latest.csv`
 - `output/options_latest.csv`
 - `output/momentum_latest.csv`
+- `output/sector_momentum_latest.csv`
 - `output/scheduler/runs.db`
 
 上述文件尚未生成时，面板会显示等待状态而不是启动失败。

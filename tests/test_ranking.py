@@ -7,7 +7,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import ranking
+import ranking  # noqa: E402
 
 
 def frame(closes, start="2026-01-01"):
@@ -39,6 +39,44 @@ class MomentumRankingTests(unittest.TestCase):
         self.assertAlmostEqual(result.loc[0, "excess_2d"], 10.5)
         self.assertAlmostEqual(result.loc[1, "excess_2d"], -10.5)
         self.assertEqual(result["rank_2d"].tolist(), [1, 2])
+
+    def test_assigns_sector_and_calculates_sector_relative_metrics(self):
+        frames = {
+            "au6666": frame([100, 110, 120]),
+            "ag6666": frame([100, 105, 110]),
+            "rb6666": frame([100, 100, 100]),
+        }
+
+        result = ranking.build_momentum_ranking(frames, horizons=(2,)).set_index("code")
+
+        self.assertEqual(result.loc["au6666", "sector"], "贵金属")
+        self.assertEqual(result.loc["ag6666", "sector"], "贵金属")
+        self.assertEqual(result.loc["rb6666", "sector"], "黑色")
+        self.assertAlmostEqual(result.loc["au6666", "sector_return_2d"], 15.0)
+        self.assertAlmostEqual(result.loc["au6666", "sector_excess_2d"], 5.0)
+        self.assertAlmostEqual(result.loc["ag6666", "sector_excess_2d"], -5.0)
+        self.assertEqual(result.loc["au6666", "sector_rank_2d"], 1)
+        self.assertEqual(result.loc["ag6666", "sector_rank_2d"], 2)
+
+    def test_builds_sector_momentum_leaderboard(self):
+        product_ranking = ranking.build_momentum_ranking(
+            {
+                "au6666": frame([100, 110, 120]),
+                "ag6666": frame([100, 105, 110]),
+                "rb6666": frame([100, 100, 100]),
+            },
+            horizons=(2,),
+        )
+
+        result = ranking.build_sector_ranking(product_ranking, horizons=(2,))
+
+        self.assertEqual(result["sector"].tolist(), ["贵金属", "黑色"])
+        self.assertEqual(result["constituents"].tolist(), [2, 1])
+        self.assertAlmostEqual(result.loc[0, "sector_return_2d"], 15.0)
+        self.assertAlmostEqual(result.loc[1, "sector_return_2d"], 0.0)
+        self.assertEqual(result["sector_rank_2d"].tolist(), [1, 2])
+        self.assertAlmostEqual(result.loc[0, "sector_momentum_score"], 100.0)
+        self.assertAlmostEqual(result.loc[1, "sector_momentum_score"], 50.0)
 
     def test_discovers_only_official_commodity_return_indices(self):
         instruments = [

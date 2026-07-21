@@ -46,12 +46,25 @@ class CommandTask:
                 text=True,
                 stdout=handle,
                 stderr=subprocess.STDOUT,
-                start_new_session=True,
+                start_new_session=os.name != "nt",
+                creationflags=(
+                    subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+                ),
             )
             try:
                 return_code = process.wait(timeout=self.timeout)
             except subprocess.TimeoutExpired as exc:
-                os.killpg(process.pid, signal.SIGKILL)
+                if os.name == "nt":
+                    subprocess.run(
+                        ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                        check=False,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    if process.poll() is None:
+                        process.kill()
+                else:
+                    os.killpg(process.pid, signal.SIGKILL)
                 process.wait()
                 handle.write(f"[timeout after {self.timeout}s]\n")
                 handle.flush()
@@ -80,7 +93,7 @@ def load_holidays(path: Path | None) -> set[str]:
 
 
 def build_handlers(project_dir: Path, log_dir: Path, timeout: int = 300):
-    python = project_dir / ".venv/bin/python"
+    python = Path(sys.executable)
     return {
         "intraday": CommandTask(
             [
@@ -101,7 +114,11 @@ def build_handlers(project_dir: Path, log_dir: Path, timeout: int = 300):
             project_dir, log_dir / "options.log", timeout,
         ),
         "momentum": CommandTask(
-            [python, "momentum_cli.py", "--top", "20", "--csv", "output/momentum_latest.csv"],
+            [
+                python, "momentum_cli.py", "--top", "20",
+                "--csv", "output/momentum_latest.csv",
+                "--sector-csv", "output/sector_momentum_latest.csv",
+            ],
             project_dir, log_dir / "momentum.log", timeout,
         ),
     }

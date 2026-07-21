@@ -36,7 +36,7 @@ if (-not $SkipScan) {
     if ($LASTEXITCODE -ne 0) { throw "动量扫描失败，退出码 $LASTEXITCODE" }
 
     Write-Host "[2/3] 生成临期期权快照..." -ForegroundColor Cyan
-    & $Python option_cli.py --mode double --snapshot-csv output/options_candidates_latest.csv --filtered-csv output/options_latest.csv --top 30
+    & $Python option_cli.py --mode double --new-only --state-file output/state/options.json --snapshot-csv output/options_candidates_latest.csv --filtered-csv output/options_latest.csv --csv output/options_alerts.csv --top 30
     if ($LASTEXITCODE -ne 0) { throw "期权扫描失败，退出码 $LASTEXITCODE" }
 
     Write-Host "[3/3] 生成盘中雷达快照..." -ForegroundColor Cyan

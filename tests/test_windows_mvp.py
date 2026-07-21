@@ -13,6 +13,9 @@ class WindowsMvpTests(unittest.TestCase):
             "--snapshot-csv output/options_candidates_latest.csv", script
         )
         self.assertIn("--filtered-csv output/options_latest.csv", script)
+        self.assertIn("--new-only", script)
+        self.assertIn("--state-file output/state/options.json", script)
+        self.assertIn("--csv output/options_alerts.csv", script)
 
 
 if __name__ == "__main__":

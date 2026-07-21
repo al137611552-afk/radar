@@ -7,6 +7,7 @@ const titles = {
   options: "临期期权信号",
   momentum: "商品动量排名",
   sectors: "板块动量排名",
+  history: "日频排名变化",
   tasks: "自动任务状态",
 };
 
@@ -92,6 +93,7 @@ function renderSummary() {
     ["期权信号", summary.option_count, "临期双确认候选", "red"],
     ["动量品种", summary.momentum_count, "多周期商品指数", "green"],
     ["动量板块", summary.sector_count, "等权板块强弱", "purple"],
+    ["排名历史", summary.momentum_history_count, "最近交易日变化", "green"],
     ["失败任务", summary.failed_tasks, summary.health === "healthy" ? "调度链路正常" : "需要检查日志", summary.failed_tasks ? "red" : "green"],
   ];
   const target = $("#summary-cards");
@@ -266,6 +268,35 @@ function renderSectors() {
   $("#sectors-risk-short-table").replaceChildren(...directionalRows(rows, "sector_risk_short_rank").map((item) => sectorRow(item, "sector_risk_short_rank", "sector_risk_adjusted_score")));
 }
 
+function renderMomentumHistory() {
+  const rows = (state.data.momentum_history || []).filter(matches);
+  $("#momentum-history-meta").textContent = `${rows.length} 品种`;
+  const rankDelta = (input) => {
+    if (input === null || input === undefined || input === "") return "—";
+    const parsed = Number(input);
+    return Number.isFinite(parsed) ? `${parsed > 0 ? "+" : ""}${parsed}` : "—";
+  };
+  $("#momentum-history-table").replaceChildren(...rows.map((item) => {
+    const row = node("tr");
+    addCell(row, value(item.snapshot_date), "number muted");
+    const instrumentCell = node("td");
+    const instrument = node("div", "instrument");
+    instrument.append(node("strong", "", value(item.name, item.code)), node("small", "", value(item.code)));
+    instrumentCell.append(instrument); row.append(instrumentCell);
+    addCell(row, value(item.sector));
+    addCell(row, integer(item.long_rank), "rank");
+    addCell(row, rankDelta(item.long_rank_change), `number ${trendClass(item.long_rank_change)}`);
+    addCell(row, integer(item.risk_long_rank), "rank");
+    addCell(row, rankDelta(item.risk_long_rank_change), `number ${trendClass(item.risk_long_rank_change)}`);
+    const statusCell = node("td");
+    const isNew = item.new_long_entry || item.new_risk_long_entry;
+    statusCell.append(badge(isNew ? "新晋" : "持续", isNew ? "long" : "flat")); row.append(statusCell);
+    addCell(row, number(item.momentum_score, 1), "score");
+    addCell(row, number(item.risk_adjusted_score, 1), "score");
+    return row;
+  }));
+}
+
 function renderTasks() {
   const target = $("#task-grid");
   const rows = state.data.tasks.filter(matches);
@@ -282,7 +313,7 @@ function renderTasks() {
 
 function renderTables() {
   if (!state.data) return;
-  renderIntraday(); renderOptions(); renderMomentum(); renderSectors(); renderTasks();
+  renderIntraday(); renderOptions(); renderMomentum(); renderSectors(); renderMomentumHistory(); renderTasks();
 }
 
 function renderAll() {

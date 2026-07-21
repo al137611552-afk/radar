@@ -10,14 +10,45 @@ from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
+import pandas as pd
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import dashboard  # noqa: E402
 import dashboard_cli  # noqa: E402
+from momentum_history_store import save_momentum_snapshot  # noqa: E402
 
 
 class DashboardDataTests(unittest.TestCase):
+    def test_snapshot_exposes_daily_momentum_rank_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "output/history/momentum.db"
+            base = {
+                "name": "黄金指数", "exchange": "SHFE", "sector": "贵金属",
+                "momentum_score": 90.0, "short_rank": 2,
+                "risk_adjusted_score": 88.0, "risk_short_rank": 2,
+                "volatility_score": 60.0, "volatility_risk": "常态",
+            }
+            first = pd.DataFrame([
+                {**base, "code": "au6666", "as_of": "2026-07-18",
+                 "long_rank": 2, "risk_long_rank": 2},
+            ])
+            latest = pd.DataFrame([
+                {**base, "code": "au6666", "as_of": "2026-07-20",
+                 "long_rank": 1, "risk_long_rank": 1},
+            ])
+            save_momentum_snapshot(path, first)
+            save_momentum_snapshot(path, latest)
+
+            payload = dashboard.build_dashboard_payload(root)
+
+            self.assertEqual(payload["summary"]["momentum_history_count"], 1)
+            self.assertEqual(payload["momentum_history"][0]["code"], "au6666")
+            self.assertEqual(payload["momentum_history"][0]["long_rank_change"], 1)
+            json.dumps(payload, ensure_ascii=False, allow_nan=False)
+
     def test_snapshot_combines_market_files_and_scheduler_status(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -200,8 +231,11 @@ class DashboardAssetTests(unittest.TestCase):
         script = (ROOT / "web/assets/dashboard.js").read_text(encoding="utf-8")
         stylesheet = (ROOT / "web/assets/dashboard.css").read_text(encoding="utf-8")
 
-        for panel in ("overview", "intraday", "options", "momentum", "sectors", "tasks"):
+        for panel in ("overview", "intraday", "options", "momentum", "sectors", "history", "tasks"):
             self.assertIn(f'data-panel="{panel}"', index)
+        self.assertIn('id="momentum-history-table"', index)
+        self.assertIn("function renderMomentumHistory()", script)
+        self.assertIn("long_rank_change", script)
         self.assertIn('id="sectors-table"', index)
         self.assertIn('id="momentum-long-table"', index)
         self.assertIn('id="momentum-short-table"', index)
@@ -230,8 +264,8 @@ class DashboardAssetTests(unittest.TestCase):
         self.assertIn('directionalRows(rows, "short_rank")', script)
         self.assertIn('directionalRows(rows, "risk_long_rank")', script)
         self.assertIn('directionalRows(rows, "risk_short_rank")', script)
-        self.assertIn('/assets/dashboard.css?v=20260721-6', index)
-        self.assertIn('/assets/dashboard.js?v=20260721-6', index)
+        self.assertIn('/assets/dashboard.css?v=20260721-7', index)
+        self.assertIn('/assets/dashboard.js?v=20260721-7', index)
         self.assertIn(".table-card>.card-head{padding:", stylesheet)
         self.assertIn(".table-card+.table-card{margin-top:", stylesheet)
         self.assertIn(".risk-badge.high{", stylesheet)

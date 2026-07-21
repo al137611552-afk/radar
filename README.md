@@ -75,8 +75,11 @@ export QUOTE_API_KEY='你的 Access Key'
 .venv/bin/python momentum_cli.py \
   --top 20 \
   --csv output/momentum_latest.csv \
-  --sector-csv output/sector_momentum_latest.csv
+  --sector-csv output/sector_momentum_latest.csv \
+  --history-db output/history/momentum.db
 ```
+
+`--history-db` 会把每次完整商品横截面按最新数据截止日写入 SQLite。相同交易日重复运行会完整替换该日切片，不会累积重复行；每个品种自身的 `as_of` 仍逐行保留，以便审计不同交易时段造成的截止日差异。自动调度默认写入 `output/history/momentum.db`，Dashboard 的“排名变化”页面会对比最近两个快照，显示原始与风险调整多头排名变化以及 Top 20 新晋品种。首次快照只建立基线，尚无前一交易日可供比较。
 
 ## 临期期权小时金叉扫描
 

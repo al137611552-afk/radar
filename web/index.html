@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>Watchman · 期货监控台</title>
-  <link rel="stylesheet" href="/assets/dashboard.css?v=20260721-6">
-  <script src="/assets/dashboard.js?v=20260721-6" defer></script>
+  <link rel="stylesheet" href="/assets/dashboard.css?v=20260721-7">
+  <script src="/assets/dashboard.js?v=20260721-7" defer></script>
 </head>
 <body>
   <div class="app-shell">
@@ -21,7 +21,8 @@
         <button class="nav-item" data-panel="options"><span>03</span>期权信号</button>
         <button class="nav-item" data-panel="momentum"><span>04</span>动量排名</button>
         <button class="nav-item" data-panel="sectors"><span>05</span>板块动量</button>
-        <button class="nav-item" data-panel="tasks"><span>06</span>任务状态</button>
+        <button class="nav-item" data-panel="history"><span>06</span>排名变化</button>
+        <button class="nav-item" data-panel="tasks"><span>07</span>任务状态</button>
       </nav>
       <div class="sidebar-foot">
         <div class="connection"><span id="connection-dot"></span><b id="connection-text">连接中</b></div>
@@ -96,6 +97,11 @@
           <article class="table-card"><div class="card-head"><div><p class="eyebrow">RISK-ADJUSTED LONG SECTORS</p><h3>板块风险调整多头强势榜</h3></div></div><div class="table-scroll"><table><thead><tr><th>风险多头排名</th><th>板块</th><th>成分数</th><th>风险分</th><th>原始分</th><th>20日成员平均年化波动</th><th>风险</th><th>5日</th><th>20日</th><th>60日</th><th>120日</th><th>日期</th></tr></thead><tbody id="sectors-risk-long-table"></tbody></table></div></article>
           <article class="table-card"><div class="card-head"><div><p class="eyebrow">RISK-ADJUSTED SHORT SECTORS</p><h3>板块风险调整空头弱势榜</h3></div></div><div class="table-scroll"><table><thead><tr><th>风险空头排名</th><th>板块</th><th>成分数</th><th>风险分</th><th>原始分</th><th>20日成员平均年化波动</th><th>风险</th><th>5日</th><th>20日</th><th>60日</th><th>120日</th><th>日期</th></tr></thead><tbody id="sectors-risk-short-table"></tbody></table></div></article>
         </div>
+      </section>
+
+      <section class="panel" data-panel="history">
+        <div class="section-intro"><div><p class="eyebrow">DAILY RANK MOVES</p><h2>日频动量排名变化</h2><p>对比最近两个完整交易日，正数表示排名上升，首次进入当前 Top 20 标记为新晋。</p></div><span id="momentum-history-meta" class="count-badge">0 品种</span></div>
+        <article class="table-card"><div class="table-scroll"><table><thead><tr><th>日期</th><th>品种</th><th>板块</th><th>原始多头排名</th><th>变化</th><th>风险多头排名</th><th>变化</th><th>状态</th><th>原始分</th><th>风险分</th></tr></thead><tbody id="momentum-history-table"></tbody></table></div></article>
       </section>
 
       <section class="panel" data-panel="tasks">

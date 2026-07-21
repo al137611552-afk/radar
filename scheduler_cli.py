@@ -119,6 +119,7 @@ def build_handlers(project_dir: Path, log_dir: Path, timeout: int = 300):
                 python, "momentum_cli.py", "--top", "20",
                 "--csv", "output/momentum_latest.csv",
                 "--sector-csv", "output/sector_momentum_latest.csv",
+                "--history-db", "output/history/momentum.db",
             ],
             project_dir, log_dir / "momentum.log", timeout,
         ),

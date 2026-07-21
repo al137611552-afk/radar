@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import momentum_cli  # noqa: E402
+from momentum_history_store import load_momentum_history  # noqa: E402
 
 
 class MomentumCliTests(unittest.TestCase):
@@ -90,6 +91,7 @@ class MomentumCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             product_path = Path(directory) / "momentum.csv"
             sector_path = Path(directory) / "sectors.csv"
+            history_path = Path(directory) / "momentum.db"
             output = io.StringIO()
             with patch.object(momentum_cli, "QuoteClient", return_value=object()), \
                     patch.object(momentum_cli, "generate_ranking", return_value=source), \
@@ -98,11 +100,15 @@ class MomentumCliTests(unittest.TestCase):
                     "--top", "0", "--horizons", "2",
                     "--csv", str(product_path),
                     "--sector-csv", str(sector_path),
+                    "--history-db", str(history_path),
                 ])
 
             self.assertEqual(code, 0)
             self.assertEqual(pd.read_csv(product_path)["sector"].tolist(), ["贵金属"])
             self.assertEqual(pd.read_csv(sector_path)["sector"].tolist(), ["贵金属"])
+            self.assertEqual(
+                load_momentum_history(history_path)["code"].tolist(), ["au6666"]
+            )
             rendered = output.getvalue()
             for heading in (
                 "原始动量多头强势榜：", "原始动量空头弱势榜：",

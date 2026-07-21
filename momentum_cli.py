@@ -7,6 +7,7 @@ import argparse
 import pandas as pd
 
 from atomic_io import atomic_to_csv
+from momentum_history_store import save_momentum_snapshot
 from quote_api import QuoteClient
 from ranking import build_sector_ranking, generate_ranking
 
@@ -117,6 +118,7 @@ def main(argv=None):
     )
     parser.add_argument("--csv", help="可选：保存完整排名CSV的路径")
     parser.add_argument("--sector-csv", help="可选：保存板块动量榜CSV的路径")
+    parser.add_argument("--history-db", help="可选：保存日频动量排名历史SQLite")
     args = parser.parse_args(argv)
 
     try:
@@ -134,6 +136,8 @@ def main(argv=None):
         atomic_to_csv(
             sector_result, args.sector_csv, index=False, encoding="utf-8-sig"
         )
+    if args.history_db:
+        save_momentum_snapshot(args.history_db, result)
     display = build_display_table(result, args.horizons)
     def ranked(table, rank_column, tie_column):
         ordered = table.sort_values([rank_column, tie_column])
@@ -173,6 +177,8 @@ def main(argv=None):
         print(f"完整结果已保存：{args.csv}")
     if args.sector_csv:
         print(f"板块结果已保存：{args.sector_csv}")
+    if args.history_db:
+        print(f"日频动量历史已保存：{args.history_db}")
     return 0
 
 

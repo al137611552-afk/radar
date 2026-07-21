@@ -9,6 +9,10 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import pandas as pd
+
+from momentum_history_store import load_momentum_history, summarize_momentum_changes
+
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 DATA_FILES = {
     "intraday": Path("output/intraday_latest.csv"),
@@ -17,6 +21,7 @@ DATA_FILES = {
     "sectors": Path("output/sector_momentum_latest.csv"),
 }
 SCHEDULER_DB = Path("output/scheduler/runs.db")
+MOMENTUM_HISTORY_DB = Path("output/history/momentum.db")
 
 
 def _coerce(value: str):
@@ -64,6 +69,23 @@ def _load_csv(path: Path) -> tuple[list[dict], str | None]:
         return _read_csv(path), None
     except (OSError, UnicodeError, csv.Error, ValueError, AttributeError):
         return [], "CSV文件损坏或暂时无法读取"
+
+
+def _dataframe_records(frame: pd.DataFrame) -> list[dict]:
+    records = []
+    for row in frame.to_dict("records"):
+        item = {}
+        for key, value in row.items():
+            if value is None or pd.isna(value):
+                item[key] = None
+            elif isinstance(value, pd.Timestamp):
+                item[key] = value.date().isoformat()
+            elif hasattr(value, "item"):
+                item[key] = value.item()
+            else:
+                item[key] = value
+        records.append(item)
+    return records
 
 
 def _redact_error(error):
@@ -144,6 +166,9 @@ def build_dashboard_payload(root: Path, now: datetime | None = None) -> dict:
     for name, relative in DATA_FILES.items():
         datasets[name], data_errors[name] = _load_csv(root / relative)
     tasks = _read_tasks(root / SCHEDULER_DB)
+    momentum_history = _dataframe_records(summarize_momentum_changes(
+        load_momentum_history(root / MOMENTUM_HISTORY_DB)
+    ))
     files = {
         name: _file_status(
             root, DATA_FILES[name], len(rows), current, data_errors[name]
@@ -165,9 +190,11 @@ def build_dashboard_payload(root: Path, now: datetime | None = None) -> dict:
             "option_count": len(datasets["options"]),
             "momentum_count": len(datasets["momentum"]),
             "sector_count": len(datasets["sectors"]),
+            "momentum_history_count": len(momentum_history),
             "failed_tasks": failed_tasks,
         },
         "files": files,
         "tasks": tasks,
+        "momentum_history": momentum_history,
         **datasets,
     }

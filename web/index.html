@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>Watchman · 期货监控台</title>
-  <link rel="stylesheet" href="/assets/dashboard.css?v=20260721-8">
-  <script src="/assets/dashboard.js?v=20260721-8" defer></script>
+  <link rel="stylesheet" href="/assets/dashboard.css?v=20260721-10">
+  <script src="/assets/dashboard.js?v=20260721-10" defer></script>
 </head>
 <body>
   <div class="app-shell">
@@ -23,7 +23,8 @@
         <button class="nav-item" data-panel="momentum"><span>05</span>动量排名</button>
         <button class="nav-item" data-panel="sectors"><span>06</span>板块动量</button>
         <button class="nav-item" data-panel="history"><span>07</span>排名变化</button>
-        <button class="nav-item" data-panel="tasks"><span>08</span>任务状态</button>
+        <button class="nav-item" data-panel="product"><span>08</span>品种详情</button>
+        <button class="nav-item" data-panel="tasks"><span>09</span>任务状态</button>
       </nav>
       <div class="sidebar-foot">
         <div class="connection"><span id="connection-dot"></span><b id="connection-text">连接中</b></div>
@@ -108,6 +109,28 @@
       <section class="panel" data-panel="history">
         <div class="section-intro"><div><p class="eyebrow">DAILY RANK MOVES</p><h2>日频动量排名变化</h2><p>对比最近两个完整交易日，正数表示排名上升，首次进入当前 Top 20 标记为新晋。</p></div><span id="momentum-history-meta" class="count-badge">0 品种</span></div>
         <article class="table-card"><div class="table-scroll"><table><thead><tr><th>日期</th><th>品种</th><th>板块</th><th>原始多头排名</th><th>变化</th><th>风险多头排名</th><th>变化</th><th>状态</th><th>原始分</th><th>风险分</th></tr></thead><tbody id="momentum-history-table"></tbody></table></div></article>
+      </section>
+
+      <section class="panel" data-panel="product">
+        <div class="section-intro product-intro">
+          <div><p class="eyebrow">PRODUCT INTELLIGENCE</p><h2>单品种研究详情</h2><p>聚合当前动量、最近 60 个交易日排名轨迹、主力盘中状态与关联临期期权。</p></div>
+          <label class="product-picker"><span>选择品种</span><select id="product-select" aria-label="选择研究品种"><option value="">等待动量数据</option></select></label>
+        </div>
+        <div class="product-layout">
+          <article class="product-hero card span-2">
+            <div><p class="eyebrow">SELECTED PRODUCT</p><h3 id="product-name">尚未选择品种</h3><p id="product-subtitle" class="muted">从动量排名点击品种，或使用右上角选择器。</p></div>
+            <span id="product-risk" class="risk-badge unknown">—</span>
+          </article>
+          <div id="product-metrics" class="product-metrics span-2" aria-live="polite"></div>
+          <article class="card span-2 product-chart-card">
+            <div class="card-head"><div><p class="eyebrow">DAILY RANK TRAJECTORY</p><h3>动量多头排名轨迹</h3></div><span id="product-chart-meta" class="muted">最近 60 个交易日</span></div>
+            <div id="product-chart-empty" class="chart-empty">等待排名历史</div>
+            <svg id="product-rank-chart" class="rank-chart" viewBox="0 0 900 280" role="img" aria-label="原始与风险调整动量排名轨迹"></svg>
+            <div class="chart-legend"><span><i class="raw"></i>原始多头排名</span><span><i class="risk"></i>风险调整多头排名</span><small>排名越靠上越强</small></div>
+          </article>
+          <article class="table-card span-2"><div class="card-head"><div><p class="eyebrow">INTRADAY CONTRACTS</p><h3>当前主力合约</h3></div><span id="product-intraday-meta" class="count-badge">0 合约</span></div><div class="table-scroll"><table><thead><tr><th>合约</th><th>方向</th><th>15分排名</th><th>最新价</th><th>15分成交额</th><th>15分涨跌</th><th>K线时间</th></tr></thead><tbody id="product-intraday-table"></tbody></table></div></article>
+          <article class="table-card span-2"><div class="card-head"><div><p class="eyebrow">LINKED OPTIONS</p><h3>关联临期期权</h3></div><span id="product-options-meta" class="count-badge">0 信号</span></div><div class="table-scroll"><table><thead><tr><th>期权合约</th><th>类型</th><th>DTE</th><th>标的</th><th>行权价</th><th>确认分</th><th>成交量</th><th>K线时间</th></tr></thead><tbody id="product-options-table"></tbody></table></div></article>
+        </div>
       </section>
 
       <section class="panel" data-panel="tasks">

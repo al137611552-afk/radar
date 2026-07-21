@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import math
+import re
 import sqlite3
 from datetime import datetime
 from numbers import Real
@@ -12,7 +13,11 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from momentum_history_store import load_momentum_history, summarize_momentum_changes
+from momentum_history_store import (
+    load_momentum_history,
+    load_momentum_trajectory,
+    summarize_momentum_changes,
+)
 from option_history_store import load_option_history, summarize_option_changes
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
@@ -72,6 +77,53 @@ def _load_csv(path: Path) -> tuple[list[dict], str | None]:
         return _read_csv(path), None
     except (OSError, UnicodeError, csv.Error, ValueError, AttributeError):
         return [], "CSV文件损坏或暂时无法读取"
+
+
+def _product_prefix(code) -> str:
+    match = re.fullmatch(r"([A-Za-z]{1,3})6666", str(code).strip())
+    if not match:
+        raise ValueError("product code must be 1-3 letters followed by 6666")
+    return match.group(1).lower()
+
+
+def normalize_product_code(code) -> str:
+    """Validate and return the canonical lowercase product-index code."""
+    return f"{_product_prefix(code)}6666"
+
+
+def _belongs_to_product(code, prefix: str) -> bool:
+    match = re.match(r"([A-Za-z]{1,3})", str(code or ""))
+    return bool(match and match.group(1).lower() == prefix)
+
+
+def build_product_detail(root: Path, code, trajectory_limit: int = 60) -> dict:
+    """Build one bounded, JSON-safe product drill-down from read-only sources."""
+    root = Path(root).resolve()
+    canonical = normalize_product_code(code)
+    prefix = _product_prefix(canonical)
+    momentum, _ = _load_csv(root / DATA_FILES["momentum"])
+    intraday, _ = _load_csv(root / DATA_FILES["intraday"])
+    options, _ = _load_csv(root / DATA_FILES["options"])
+    current = next(
+        (row for row in momentum if str(row.get("code", "")).lower() == canonical),
+        None,
+    )
+    trajectory = load_momentum_trajectory(
+        root / MOMENTUM_HISTORY_DB, canonical, limit=trajectory_limit
+    )
+    return {
+        "code": canonical,
+        "current": current,
+        "momentum_trajectory": _dataframe_records(trajectory),
+        "intraday": [
+            row for row in intraday if _belongs_to_product(row.get("code"), prefix)
+        ],
+        "options": [
+            row
+            for row in options
+            if _belongs_to_product(row.get("underlying"), prefix)
+        ],
+    }
 
 
 def _dataframe_records(frame: pd.DataFrame) -> list[dict]:

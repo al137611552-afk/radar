@@ -1,6 +1,15 @@
 "use strict";
 
-const state = { data: null, panel: "overview", query: "", loading: false };
+const state = {
+  data: null,
+  panel: "overview",
+  query: "",
+  loading: false,
+  productCode: "",
+  productData: null,
+  productLoading: false,
+  productRequestId: 0,
+};
 const titles = {
   overview: "市场总览",
   intraday: "盘中成交额雷达",
@@ -9,6 +18,7 @@ const titles = {
   momentum: "商品动量排名",
   sectors: "板块动量排名",
   history: "日频排名变化",
+  product: "单品种研究详情",
   tasks: "自动任务状态",
 };
 
@@ -84,6 +94,9 @@ function setPanel(panel) {
   if (panel === "overview") $("#global-search").value = "";
   if (panel === "overview") state.query = "";
   renderTables();
+  if (panel === "product" && state.productCode && state.productData?.code !== state.productCode) {
+    loadProductDetail(state.productCode);
+  }
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -257,7 +270,13 @@ function directionalRows(rows, rankField) {
 
 function momentumRow(item, rankField, primaryScoreField) {
   const row = node("tr"); addCell(row, String(item[rankField] ?? "-").padStart(2, "0"), "rank");
-  const instrumentCell = node("td"); const instrument = node("div", "instrument"); instrument.append(node("strong", "", value(item.name, item.code)), node("small", "", value(item.code))); instrumentCell.append(instrument); row.append(instrumentCell);
+  const instrumentCell = node("td");
+  const instrument = node("div", "instrument");
+  const productButton = node("button", "product-link", value(item.name, item.code));
+  productButton.type = "button";
+  productButton.addEventListener("click", () => openProduct(item.code));
+  instrument.append(productButton, node("small", "", value(item.code)));
+  instrumentCell.append(instrument); row.append(instrumentCell);
   addCell(row, value(item.sector));
   const secondaryScoreField = primaryScoreField === "momentum_score" ? "risk_adjusted_score" : "momentum_score";
   addCell(row, number(item[primaryScoreField], 1), "score");
@@ -330,6 +349,158 @@ function renderMomentumHistory() {
   }));
 }
 
+function svgNode(tag, attributes = {}, text) {
+  const element = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  Object.entries(attributes).forEach(([name, content]) => element.setAttribute(name, String(content)));
+  if (text !== undefined) element.textContent = String(text);
+  return element;
+}
+
+function renderRankChart(rows) {
+  const svg = $("#product-rank-chart");
+  const empty = $("#product-chart-empty");
+  const hasRank = (input) => input !== null && input !== "" && Number.isFinite(Number(input));
+  const valid = rows.filter((row) => hasRank(row.long_rank) || hasRank(row.risk_long_rank));
+  svg.replaceChildren();
+  empty.classList.toggle("hidden", valid.length > 0);
+  svg.classList.toggle("visible", valid.length > 0);
+  svg.classList.toggle("single-point", valid.length === 1);
+  svg.closest(".product-chart-card").classList.toggle("single-snapshot", valid.length === 1);
+  $("#product-chart-meta").textContent = valid.length === 1
+    ? "1 个交易日 · 等待后续快照"
+    : valid.length ? `${valid.length} 个交易日` : "暂无排名历史";
+  if (!valid.length) return;
+
+  const width = 900; const height = 280;
+  const left = 54; const right = 20; const top = 24; const bottom = 42;
+  const plotWidth = width - left - right; const plotHeight = height - top - bottom;
+  const ranks = valid.flatMap((row) => [row.long_rank, row.risk_long_rank]).filter(hasRank).map(Number);
+  const maxRank = Math.max(2, ...ranks);
+  const x = (index) => left + (valid.length === 1 ? plotWidth / 2 : (index * plotWidth) / (valid.length - 1));
+  const y = (rank) => top + ((Math.max(1, rank) - 1) * plotHeight) / (maxRank - 1);
+  const ticks = [...new Set([1, Math.ceil(maxRank / 2), maxRank])];
+  ticks.forEach((rank) => {
+    const lineY = y(rank);
+    svg.append(
+      svgNode("line", { x1: left, y1: lineY, x2: width - right, y2: lineY, class: "chart-grid" }),
+      svgNode("text", { x: left - 12, y: lineY + 4, class: "chart-axis", "text-anchor": "end" }, rank),
+    );
+  });
+  const pointsFor = (field) => valid.map((row, index) => {
+    const rank = Number(row[field]);
+    return Number.isFinite(rank) && row[field] !== null && row[field] !== ""
+      ? { x: x(index), y: y(rank) }
+      : null;
+  }).filter(Boolean);
+  [["long_rank", "raw-line"], ["risk_long_rank", "risk-line"]].forEach(([field, className]) => {
+    const points = pointsFor(field);
+    if (!points.length) return;
+    svg.append(svgNode("path", { d: points.map((point, index) => `${index ? "L" : "M"}${point.x},${point.y}`).join(" "), class: `rank-line ${className}` }));
+    const latest = points[points.length - 1];
+    svg.append(svgNode("circle", { cx: latest.x, cy: latest.y, r: 5, class: `rank-dot ${className}` }));
+  });
+  [...new Set([0, Math.floor((valid.length - 1) / 2), valid.length - 1])].forEach((index) => {
+    svg.append(svgNode("text", { x: x(index), y: height - 13, class: "chart-axis", "text-anchor": index === 0 ? "start" : index === valid.length - 1 ? "end" : "middle" }, value(valid[index].snapshot_date, "")));
+  });
+}
+
+function renderProductDetail() {
+  const detail = state.productData;
+  const current = detail?.current;
+  if (!detail || !current) {
+    $("#product-name").textContent = state.productLoading ? "正在载入品种详情…" : "暂无该品种数据";
+    $("#product-subtitle").textContent = state.productCode || "请选择一个动量品种";
+    $("#product-risk").className = "risk-badge unknown";
+    $("#product-risk").textContent = "—";
+    $("#product-metrics").replaceChildren();
+    renderRankChart(detail?.momentum_trajectory || []);
+    $("#product-intraday-table").replaceChildren();
+    $("#product-options-table").replaceChildren();
+    $("#product-intraday-meta").textContent = "0 合约";
+    $("#product-options-meta").textContent = "0 信号";
+    return;
+  }
+  $("#product-name").textContent = value(current.name, current.code);
+  $("#product-subtitle").textContent = `${value(current.code)} · ${value(current.exchange)} · ${value(current.sector)} · ${value(current.as_of)}`;
+  const risk = $("#product-risk");
+  risk.className = `risk-badge ${current.volatility_risk === "高波动" ? "high" : current.volatility_risk === "偏高" ? "elevated" : current.volatility_risk === "常态" ? "normal" : "unknown"}`;
+  risk.textContent = value(current.volatility_risk);
+  const metrics = [
+    ["原始动量分", number(current.momentum_score, 1), "MOMENTUM"],
+    ["风险调整分", number(current.risk_adjusted_score, 1), "RISK ADJUSTED"],
+    ["原始多头排名", integer(current.long_rank), "RAW LONG"],
+    ["风险多头排名", integer(current.risk_long_rank), "RISK LONG"],
+    ["20日收益", percent(current.return_20d), "RETURN 20D"],
+    ["20日年化波动", percent(current.annualized_volatility_20d), "VOLATILITY"],
+  ];
+  $("#product-metrics").replaceChildren(...metrics.map(([label, amount, caption]) => {
+    const card = node("article", "metric-card product-metric");
+    card.append(node("span", "metric-label", label), node("strong", "", amount), node("small", "", caption));
+    return card;
+  }));
+  renderRankChart(detail.momentum_trajectory || []);
+
+  const intraday = detail.intraday || [];
+  $("#product-intraday-meta").textContent = `${intraday.length} 合约`;
+  $("#product-intraday-table").replaceChildren(...intraday.map((item) => {
+    const row = node("tr");
+    addCell(row, `${value(item.name, item.code)} · ${value(item.code)}`);
+    const sideCell = node("td"); sideCell.append(item.side === "多" ? badge("多头", "long") : item.side === "空" ? badge("空头", "short") : badge("盘整", "flat")); row.append(sideCell);
+    addCell(row, integer(item.rank_15m), "rank"); addCell(row, number(item.close), "number"); addCell(row, `${number(item.turnover_15m_yi)} 亿`, "number"); addCell(row, percent(item.price_change_15m_pct), `number ${trendClass(item.price_change_15m_pct)}`); addCell(row, value(item.bar_time), "number muted");
+    return row;
+  }));
+
+  const options = detail.options || [];
+  $("#product-options-meta").textContent = `${options.length} 信号`;
+  $("#product-options-table").replaceChildren(...options.map((item) => {
+    const row = node("tr"); addCell(row, `${value(item.name, item.code)} · ${value(item.code)}`);
+    const typeCell = node("td"); typeCell.append(item.option_type === "PUT" ? badge("PUT", "put", "type-badge") : badge("CALL", "call", "type-badge")); row.append(typeCell);
+    addCell(row, value(item.dte), "number"); addCell(row, value(item.underlying)); addCell(row, number(item.strike), "number"); addCell(row, number(item.confirmation_score, 0), "score"); addCell(row, integer(item.recent_volume), "number"); addCell(row, value(item.bar_time), "number muted");
+    return row;
+  }));
+}
+
+async function loadProductDetail(code) {
+  if (!code) return;
+  const requestId = ++state.productRequestId;
+  state.productCode = code;
+  state.productLoading = true;
+  state.productData = null;
+  renderProductDetail();
+  try {
+    const response = await fetch(`/api/product?code=${encodeURIComponent(code)}`, { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const detail = await response.json();
+    if (state.productRequestId === requestId) state.productData = detail;
+  } catch (error) {
+    if (state.productRequestId === requestId) toast(`品种详情载入失败：${error.message}`);
+  } finally {
+    if (state.productRequestId === requestId) {
+      state.productLoading = false;
+      renderProductDetail();
+    }
+  }
+}
+
+function openProduct(code) {
+  if (!code) return;
+  state.productCode = code;
+  $("#product-select").value = code;
+  setPanel("product");
+}
+
+function populateProductSelect() {
+  const rows = directionalRows(state.data.momentum || [], "risk_long_rank");
+  const select = $("#product-select");
+  const options = rows.map((item) => node("option", "", `${value(item.name, item.code)} · ${value(item.code)}`));
+  options.forEach((option, index) => { option.value = rows[index].code; });
+  select.replaceChildren(...(options.length ? options : [node("option", "", "暂无动量品种")]));
+  if (!options.length) return;
+  const selected = rows.some((item) => item.code === state.productCode) ? state.productCode : rows[0].code;
+  state.productCode = selected;
+  select.value = selected;
+}
+
 function renderTasks() {
   const target = $("#task-grid");
   const rows = state.data.tasks.filter(matches);
@@ -355,6 +526,7 @@ function renderAll() {
   overviewSignals("#overview-options", state.data.options, "option");
   overviewSignals("#overview-momentum", state.data.momentum, "momentum");
   renderFreshness();
+  populateProductSelect();
   renderTables();
 }
 
@@ -371,6 +543,7 @@ async function refreshData(manual = false) {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     state.data = await response.json();
     renderAll();
+    if (state.panel === "product" && state.productCode) loadProductDetail(state.productCode);
     $("#connection-dot").className = "online"; $("#connection-text").textContent = "数据已连接";
     if (manual) toast("数据已刷新");
   } catch (error) {
@@ -391,6 +564,7 @@ $$(".nav-item").forEach((button) => button.addEventListener("click", () => setPa
 $$("[data-open-panel]").forEach((button) => button.addEventListener("click", () => setPanel(button.dataset.openPanel)));
 $("#refresh-button").addEventListener("click", () => refreshData(true));
 $("#global-search").addEventListener("input", (event) => { state.query = event.target.value.trim().toLowerCase(); renderTables(); });
+$("#product-select").addEventListener("change", (event) => openProduct(event.target.value));
 
 tickClock();
 refreshData();

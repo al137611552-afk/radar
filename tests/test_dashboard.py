@@ -90,6 +90,65 @@ class DashboardDataTests(unittest.TestCase):
             self.assertEqual(payload["momentum_history"][0]["long_rank_change"], 1)
             json.dumps(payload, ensure_ascii=False, allow_nan=False)
 
+    def test_product_detail_combines_current_market_data_and_rank_trajectory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "output"
+            output.mkdir()
+            (output / "momentum_latest.csv").write_text(
+                "code,name,exchange,sector,as_of,momentum_score,risk_adjusted_score,"
+                "long_rank,risk_long_rank,return_20d,volatility_risk\n"
+                "au6666,黄金指数,SHFE,贵金属,2026-07-20,90,88,1,2,6.5,常态\n"
+                "rb6666,螺纹钢指数,SHFE,黑色,2026-07-20,70,65,8,10,2.1,偏高\n",
+                encoding="utf-8",
+            )
+            (output / "intraday_latest.csv").write_text(
+                "code,name,exchange,rank_15m,side,turnover_15m_yi,bar_time\n"
+                "au2608,黄金2608,SHFE,3,多,12.5,2026-07-21T14:55:00+08:00\n"
+                "rb2610,螺纹钢2610,SHFE,1,空,18.0,2026-07-21T14:55:00+08:00\n",
+                encoding="utf-8",
+            )
+            (output / "options_latest.csv").write_text(
+                "code,name,exchange,underlying,option_type,dte,confirmation_score\n"
+                "au2608C880,黄金购880,SHFE,au2608,CALL,6,6\n"
+                "rb2610P3000,螺纹钢沽3000,SHFE,rb2610,PUT,8,4\n",
+                encoding="utf-8",
+            )
+            history_path = output / "history" / "momentum.db"
+            base = {
+                "code": "au6666", "name": "黄金指数", "exchange": "SHFE",
+                "sector": "贵金属", "short_rank": 80, "risk_short_rank": 79,
+                "momentum_score": 90.0, "risk_adjusted_score": 88.0,
+                "volatility_score": 50.0, "volatility_risk": "常态",
+            }
+            save_momentum_snapshot(history_path, pd.DataFrame([
+                {**base, "as_of": "2026-07-18", "long_rank": 3,
+                 "risk_long_rank": 4},
+            ]))
+            save_momentum_snapshot(history_path, pd.DataFrame([
+                {**base, "as_of": "2026-07-20", "long_rank": 1,
+                 "risk_long_rank": 2},
+            ]))
+
+            detail = dashboard.build_product_detail(root, "au6666")
+
+            self.assertEqual(detail["code"], "au6666")
+            self.assertEqual(detail["current"]["name"], "黄金指数")
+            self.assertEqual(
+                [row["long_rank"] for row in detail["momentum_trajectory"]], [3, 1]
+            )
+            self.assertEqual([row["code"] for row in detail["intraday"]], ["au2608"])
+            self.assertEqual([row["code"] for row in detail["options"]], ["au2608C880"])
+            uppercase = dashboard.build_product_detail(root, "AU6666")
+            self.assertEqual(uppercase["code"], "au6666")
+            self.assertEqual(len(uppercase["momentum_trajectory"]), 2)
+            (root / "output/momentum_latest.csv").unlink()
+            history_only = dashboard.build_product_detail(root, "AU6666")
+            self.assertEqual(history_only["code"], "au6666")
+            self.assertIsNone(history_only["current"])
+            self.assertEqual(len(history_only["momentum_trajectory"]), 2)
+            json.dumps(detail, ensure_ascii=False, allow_nan=False)
+
     def test_snapshot_combines_market_files_and_scheduler_status(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -274,9 +333,18 @@ class DashboardAssetTests(unittest.TestCase):
 
         for panel in (
             "overview", "intraday", "options", "option-history", "momentum",
-            "sectors", "history", "tasks",
+            "sectors", "history", "product", "tasks",
         ):
             self.assertIn(f'data-panel="{panel}"', index)
+        self.assertIn('id="product-select"', index)
+        self.assertIn('id="product-rank-chart"', index)
+        self.assertIn('id="product-intraday-table"', index)
+        self.assertIn('id="product-options-table"', index)
+        self.assertIn("function renderProductDetail()", script)
+        self.assertIn("function loadProductDetail", script)
+        self.assertIn("/api/product?code=", script)
+        self.assertIn("createElementNS", script)
+        self.assertIn('class="product-layout"', index)
         self.assertIn('id="option-history-table"', index)
         self.assertIn("function renderOptionHistory()", script)
         self.assertIn("change_status", script)
@@ -311,8 +379,8 @@ class DashboardAssetTests(unittest.TestCase):
         self.assertIn('directionalRows(rows, "short_rank")', script)
         self.assertIn('directionalRows(rows, "risk_long_rank")', script)
         self.assertIn('directionalRows(rows, "risk_short_rank")', script)
-        self.assertIn('/assets/dashboard.css?v=20260721-8', index)
-        self.assertIn('/assets/dashboard.js?v=20260721-8', index)
+        self.assertIn('/assets/dashboard.css?v=20260721-10', index)
+        self.assertIn('/assets/dashboard.js?v=20260721-10', index)
         self.assertIn(".table-card>.card-head{padding:", stylesheet)
         self.assertIn(".table-card+.table-card{margin-top:", stylesheet)
         self.assertIn(".risk-badge.high{", stylesheet)
@@ -355,6 +423,63 @@ class DashboardHttpTests(unittest.TestCase):
                 with urllib.request.urlopen(base + "/") as response:
                     self.assertIn("Watchman", response.read().decode())
                     self.assertEqual(response.headers.get_content_type(), "text/html")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+    def test_server_exposes_validated_product_detail_api(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "output"
+            output.mkdir()
+            (output / "momentum_latest.csv").write_text(
+                "code,name\nau6666,黄金指数\n", encoding="utf-8"
+            )
+            web = root / "web"
+            web.mkdir()
+            (web / "index.html").write_text("Watchman", encoding="utf-8")
+            server = dashboard_cli.create_server(
+                "127.0.0.1", 0, project_root=root, web_root=web
+            )
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base = f"http://127.0.0.1:{server.server_port}"
+            try:
+                with urllib.request.urlopen(base + "/api/product?code=au6666") as response:
+                    payload = json.load(response)
+                    self.assertEqual(response.status, 200)
+                    self.assertEqual(response.headers["Cache-Control"], "no-store")
+                    self.assertEqual(payload["current"]["name"], "黄金指数")
+                with self.assertRaises(urllib.error.HTTPError) as raised:
+                    urllib.request.urlopen(base + "/api/product?code=../../etc/passwd")
+                self.assertEqual(raised.exception.code, 400)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+    def test_product_data_value_error_is_server_error_not_bad_request(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            web = root / "web"
+            web.mkdir()
+            (web / "index.html").write_text("Watchman", encoding="utf-8")
+            server = dashboard_cli.create_server(
+                "127.0.0.1", 0, project_root=root, web_root=web
+            )
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base = f"http://127.0.0.1:{server.server_port}"
+            try:
+                with mock.patch.object(
+                    dashboard_cli,
+                    "build_product_detail",
+                    side_effect=ValueError("corrupt history date"),
+                ):
+                    with self.assertRaises(urllib.error.HTTPError) as raised:
+                        urllib.request.urlopen(base + "/api/product?code=au6666")
+                    self.assertEqual(raised.exception.code, 500)
             finally:
                 server.shutdown()
                 server.server_close()

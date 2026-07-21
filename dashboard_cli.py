@@ -6,9 +6,13 @@ import argparse
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
-from dashboard import build_dashboard_payload
+from dashboard import (
+    build_dashboard_payload,
+    build_product_detail,
+    normalize_product_code,
+)
 
 STATIC_ROUTES = {
     "/": ("index.html", "text/html; charset=utf-8"),
@@ -53,7 +57,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):  # noqa: N802 - BaseHTTPRequestHandler API
-        route = urlsplit(self.path).path
+        parsed = urlsplit(self.path)
+        route = parsed.path
         if route == "/api/dashboard":
             try:
                 payload = build_dashboard_payload(self.project_root)
@@ -66,6 +71,34 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send(
                     500, "application/json; charset=utf-8",
                     b'{"error":"dashboard unavailable"}', "no-store",
+                )
+                return
+            self._send(200, "application/json; charset=utf-8", body, "no-store")
+            return
+
+        if route == "/api/product":
+            codes = parse_qs(parsed.query, keep_blank_values=True).get("code", [])
+            try:
+                if len(codes) != 1:
+                    raise ValueError("exactly one product code is required")
+                code = normalize_product_code(codes[0])
+            except ValueError:
+                self._send(
+                    400, "application/json; charset=utf-8",
+                    b'{"error":"invalid product code"}', "no-store",
+                )
+                return
+            try:
+                payload = build_product_detail(self.project_root, code)
+                body = json.dumps(
+                    payload, ensure_ascii=False, allow_nan=False,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            except Exception:
+                self.log_error("product payload failed")
+                self._send(
+                    500, "application/json; charset=utf-8",
+                    b'{"error":"product unavailable"}', "no-store",
                 )
                 return
             self._send(200, "application/json; charset=utf-8", body, "no-store")

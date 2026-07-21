@@ -24,6 +24,11 @@ class MomentumCliTests(unittest.TestCase):
             "sector_return_5d": 0.9345, "sector_excess_5d": 0.3,
             "sector_rank_5d": 1,
             "momentum_score": 88.888, "long_rank": 1, "short_rank": 3,
+            "annualized_volatility_5d": 12.346,
+            "risk_adjusted_5d": 0.1,
+            "risk_adjusted_score": 92.346,
+            "risk_long_rank": 1, "risk_short_rank": 3,
+            "volatility_score": 75.0, "volatility_risk": "偏高",
         }])
 
         display = momentum_cli.build_display_table(source, horizons=(5,))
@@ -31,11 +36,15 @@ class MomentumCliTests(unittest.TestCase):
         self.assertEqual(display.columns.tolist(), [
             "代码", "名称", "板块", "数据截止", "5日收益%", "5日全商品超额%",
             "5日排名", "5日板块收益%", "5日板块超额%", "5日板块排名",
-            "综合动量分", "多头排名", "空头排名"
+            "5日年化波动%", "5日风险调整", "综合动量分", "多头排名",
+            "空头排名", "风险调整分", "风险多头排名", "风险空头排名",
+            "波动风险分", "波动风险"
         ])
         self.assertEqual(display.loc[0, "5日收益%"], 1.23)
         self.assertEqual(display.loc[0, "5日板块超额%"], 0.3)
         self.assertEqual(display.loc[0, "综合动量分"], 88.89)
+        self.assertEqual(display.loc[0, "5日年化波动%"], 12.35)
+        self.assertEqual(display.loc[0, "风险调整分"], 92.35)
 
     def test_sector_display_table_uses_compact_chinese_columns(self):
         source = pd.DataFrame([{
@@ -44,16 +53,26 @@ class MomentumCliTests(unittest.TestCase):
             "sector_return_5d": 1.2345, "sector_rank_5d": 1,
             "sector_momentum_score": 90.909,
             "sector_long_rank": 1, "sector_short_rank": 2,
+            "sector_mean_annualized_volatility_5d": 18.766,
+            "sector_risk_adjusted_5d": 0.08,
+            "sector_risk_adjusted_score": 88.888,
+            "sector_risk_long_rank": 1, "sector_risk_short_rank": 2,
+            "sector_volatility_score": 100.0,
+            "sector_volatility_risk": "高波动",
         }])
 
         display = momentum_cli.build_sector_display_table(source, horizons=(5,))
 
         self.assertEqual(display.columns.tolist(), [
             "板块", "品种数", "数据截止", "5日板块收益%", "5日板块排名",
-            "板块动量分", "多头排名", "空头排名"
+            "5日成员平均年化波动%", "5日板块风险调整", "板块动量分",
+            "多头排名", "空头排名", "板块风险调整分", "风险多头排名",
+            "风险空头排名", "波动风险分", "波动风险"
         ])
         self.assertEqual(display.loc[0, "5日板块收益%"], 1.23)
         self.assertEqual(display.loc[0, "板块动量分"], 90.91)
+        self.assertEqual(display.loc[0, "5日成员平均年化波动%"], 18.77)
+        self.assertEqual(display.loc[0, "板块风险调整分"], 88.89)
 
     def test_main_exports_product_and_sector_rankings(self):
         source = pd.DataFrame([{
@@ -63,13 +82,18 @@ class MomentumCliTests(unittest.TestCase):
             "sector_return_2d": 2.0, "sector_excess_2d": 0.0,
             "sector_rank_2d": 1, "momentum_score": 100.0,
             "long_rank": 1, "short_rank": 1,
+            "annualized_volatility_2d": 12.0, "risk_adjusted_2d": 0.16,
+            "risk_adjusted_score": 100.0,
+            "risk_long_rank": 1, "risk_short_rank": 1,
+            "volatility_score": 100.0, "volatility_risk": "高波动",
         }])
         with tempfile.TemporaryDirectory() as directory:
             product_path = Path(directory) / "momentum.csv"
             sector_path = Path(directory) / "sectors.csv"
+            output = io.StringIO()
             with patch.object(momentum_cli, "QuoteClient", return_value=object()), \
                     patch.object(momentum_cli, "generate_ranking", return_value=source), \
-                    redirect_stdout(io.StringIO()):
+                    redirect_stdout(output):
                 code = momentum_cli.main([
                     "--top", "0", "--horizons", "2",
                     "--csv", str(product_path),
@@ -79,6 +103,14 @@ class MomentumCliTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertEqual(pd.read_csv(product_path)["sector"].tolist(), ["贵金属"])
             self.assertEqual(pd.read_csv(sector_path)["sector"].tolist(), ["贵金属"])
+            rendered = output.getvalue()
+            for heading in (
+                "原始动量多头强势榜：", "原始动量空头弱势榜：",
+                "风险调整多头强势榜：", "风险调整空头弱势榜：",
+                "板块原始动量多头强势榜：", "板块原始动量空头弱势榜：",
+                "板块风险调整多头强势榜：", "板块风险调整空头弱势榜：",
+            ):
+                self.assertIn(heading, rendered)
 
 
 if __name__ == "__main__":

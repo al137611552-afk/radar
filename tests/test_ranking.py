@@ -18,6 +18,82 @@ def frame(closes, start="2026-01-01"):
 
 
 class MomentumRankingTests(unittest.TestCase):
+    def test_omits_non_contiguous_or_non_finite_trailing_close_windows(self):
+        result = ranking.build_momentum_ranking(
+            {
+                "good6666": frame([100.0, 110.0, 121.0]),
+                "gap6666": frame([100.0, float("nan"), 121.0]),
+                "tail6666": frame([100.0, 110.0, float("nan")]),
+                "inf6666": frame([100.0, 110.0, float("inf")]),
+            },
+            horizons=(2,),
+        )
+
+        self.assertEqual(result["code"].tolist(), ["good6666"])
+        self.assertEqual(result.loc[0, "as_of"], frame([1, 2, 3])["datetime"].iloc[-1])
+
+    def test_calculates_annualized_volatility_and_risk_adjusted_momentum(self):
+        source = frame([100.0, 120.0, 90.0, 110.0])
+
+        result = ranking.build_momentum_ranking(
+            {"au6666": source}, horizons=(3,)
+        ).iloc[0]
+
+        daily_returns = source["close"].pct_change().dropna().iloc[-3:]
+        expected_volatility = daily_returns.std(ddof=1) * (252 ** 0.5) * 100
+        self.assertAlmostEqual(
+            result["annualized_volatility_3d"], expected_volatility
+        )
+        self.assertAlmostEqual(
+            result["risk_adjusted_3d"],
+            result["return_3d"] / max(expected_volatility, 0.01),
+        )
+        self.assertEqual(result["risk_adjusted_score"], 100.0)
+        self.assertEqual(result["risk_long_rank"], 1)
+        self.assertEqual(result["risk_short_rank"], 1)
+
+    def test_risk_adjusted_rank_rewards_lower_volatility_for_same_return(self):
+        result = ranking.build_momentum_ranking(
+            {
+                "au6666": frame([100.0, 102.0, 104.0, 106.0, 110.0]),
+                "ag6666": frame([100.0, 130.0, 80.0, 140.0, 110.0]),
+            },
+            horizons=(4,),
+        ).set_index("code")
+
+        self.assertAlmostEqual(
+            result.loc["au6666", "return_4d"],
+            result.loc["ag6666", "return_4d"],
+        )
+        self.assertLess(
+            result.loc["au6666", "annualized_volatility_4d"],
+            result.loc["ag6666", "annualized_volatility_4d"],
+        )
+        self.assertGreater(
+            result.loc["au6666", "risk_adjusted_score"],
+            result.loc["ag6666", "risk_adjusted_score"],
+        )
+        self.assertEqual(result.loc["au6666", "risk_long_rank"], 1)
+        self.assertEqual(result.loc["ag6666", "risk_short_rank"], 1)
+
+    def test_labels_cross_sectional_volatility_risk(self):
+        result = ranking.build_momentum_ranking(
+            {
+                "au6666": frame([100.0, 101.0, 102.0, 103.0]),
+                "ag6666": frame([100.0, 103.0, 99.0, 104.0]),
+                "rb6666": frame([100.0, 110.0, 95.0, 105.0]),
+                "br6666": frame([100.0, 140.0, 70.0, 110.0]),
+            },
+            horizons=(3,),
+        ).set_index("code")
+
+        self.assertEqual(result.loc["br6666", "volatility_risk"], "高波动")
+        self.assertEqual(result.loc["au6666", "volatility_risk"], "常态")
+        self.assertGreater(
+            result.loc["br6666", "volatility_score"],
+            result.loc["au6666", "volatility_score"],
+        )
+
     def test_assigns_separate_long_and_short_momentum_ranks(self):
         result = ranking.build_momentum_ranking(
             {
@@ -94,6 +170,53 @@ class MomentumRankingTests(unittest.TestCase):
         self.assertEqual(result["sector_rank_2d"].tolist(), [1, 2])
         self.assertAlmostEqual(result.loc[0, "sector_momentum_score"], 100.0)
         self.assertAlmostEqual(result.loc[1, "sector_momentum_score"], 50.0)
+
+    def test_builds_sector_risk_adjusted_leaderboard(self):
+        product_ranking = ranking.build_momentum_ranking(
+            {
+                "au6666": frame([100.0, 102.0, 104.0, 106.0]),
+                "rb6666": frame([100.0, 110.0, 90.0, 106.0]),
+                "br6666": frame([100.0, 130.0, 80.0, 106.0]),
+            },
+            horizons=(3,),
+        )
+
+        result = ranking.build_sector_ranking(
+            product_ranking, horizons=(3,)
+        ).set_index("sector")
+
+        product = product_ranking.set_index("code")
+        self.assertAlmostEqual(
+            result.loc["贵金属", "sector_risk_adjusted_3d"],
+            product.loc["au6666", "risk_adjusted_3d"],
+        )
+        self.assertEqual(result.loc["贵金属", "sector_risk_long_rank"], 1)
+        self.assertEqual(result.loc["能源化工", "sector_risk_short_rank"], 1)
+        self.assertEqual(result.loc["能源化工", "sector_volatility_risk"], "高波动")
+
+    def test_sector_ranking_excludes_members_with_non_finite_metrics(self):
+        product_ranking = ranking.build_momentum_ranking(
+            {
+                "au6666": frame([100.0, 102.0, 104.0, 106.0]),
+                "ag6666": frame([100.0, 103.0, 105.0, 107.0]),
+                "rb6666": frame([100.0, 101.0, 102.0, 103.0]),
+            },
+            horizons=(3,),
+        )
+        product_ranking.loc[
+            product_ranking["code"] == "ag6666", "risk_adjusted_3d"
+        ] = float("inf")
+
+        result = ranking.build_sector_ranking(
+            product_ranking, horizons=(3,)
+        ).set_index("sector")
+        products = product_ranking.set_index("code")
+
+        self.assertEqual(result.loc["贵金属", "constituents"], 1)
+        self.assertAlmostEqual(
+            result.loc["贵金属", "sector_risk_adjusted_3d"],
+            products.loc["au6666", "risk_adjusted_3d"],
+        )
 
     def test_assigns_separate_sector_long_and_short_ranks(self):
         product_ranking = ranking.build_momentum_ranking(

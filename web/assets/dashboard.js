@@ -69,6 +69,11 @@ function badge(text, kind, base = "side-badge") {
   return node("span", `${base} ${kind}`, text);
 }
 
+function volatilityBadge(risk) {
+  const kind = risk === "高波动" ? "high" : risk === "偏高" ? "elevated" : risk === "常态" ? "normal" : "unknown";
+  return badge(value(risk), kind, "risk-badge");
+}
+
 function setPanel(panel) {
   state.panel = panel;
   $$(".nav-item").forEach((button) => button.classList.toggle("active", button.dataset.panel === panel));
@@ -136,13 +141,14 @@ function overviewSignals(targetSelector, rows, type) {
     return;
   }
   target.className = "signal-stack";
-  target.replaceChildren(...rows.slice(0, 4).map((row) => {
+  const visibleRows = type === "momentum" ? directionalRows(rows, "risk_long_rank") : rows;
+  target.replaceChildren(...visibleRows.slice(0, 4).map((row) => {
     const item = node("div", "signal-item");
     const top = node("div");
-    top.append(node("strong", "", value(row.name, row.code)), node("span", "score", type === "option" ? value(row.signal_score) : number(row.momentum_score, 1)));
+    top.append(node("strong", "", value(row.name, row.code)), node("span", "score", type === "option" ? value(row.signal_score) : number(row.risk_adjusted_score, 1)));
     const detail = type === "option"
       ? `${value(row.option_type)} · DTE ${value(row.dte)} · ${value(row.underlying)}`
-      : `${value(row.sector)} · 5日 ${percent(row.return_5d)} · 20日 ${percent(row.return_20d)}`;
+      : `${value(row.sector)} · 20日波动 ${percent(row.annualized_volatility_20d)} · ${value(row.volatility_risk)}`;
     item.append(top, node("p", "", detail));
     return item;
   }));
@@ -200,38 +206,52 @@ function renderOptions() {
   }));
 }
 
+function finiteRank(input) {
+  if (input === null || input === undefined || input === "") return Number.POSITIVE_INFINITY;
+  const parsed = Number(input);
+  return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
+}
+
 function directionalRows(rows, rankField) {
   return rows.slice().sort((left, right) => {
-    const leftRank = Number(left[rankField] ?? Number.POSITIVE_INFINITY);
-    const rightRank = Number(right[rankField] ?? Number.POSITIVE_INFINITY);
+    const leftRank = finiteRank(left[rankField]);
+    const rightRank = finiteRank(right[rankField]);
     return leftRank - rightRank || String(left.code ?? left.sector).localeCompare(String(right.code ?? right.sector));
   });
 }
 
-function momentumRow(item, rankField) {
+function momentumRow(item, rankField, primaryScoreField) {
   const row = node("tr"); addCell(row, String(item[rankField] ?? "-").padStart(2, "0"), "rank");
   const instrumentCell = node("td"); const instrument = node("div", "instrument"); instrument.append(node("strong", "", value(item.name, item.code)), node("small", "", value(item.code))); instrumentCell.append(instrument); row.append(instrumentCell);
   addCell(row, value(item.sector));
-  addCell(row, number(item.momentum_score, 1), "score");
-  ["return_5d", "return_20d"].forEach((key) => addCell(row, percent(item[key]), `number ${trendClass(item[key])}`));
-  addCell(row, percent(item.sector_excess_20d), `number ${trendClass(item.sector_excess_20d)}`);
-  ["return_60d", "return_120d"].forEach((key) => addCell(row, percent(item[key]), `number ${trendClass(item[key])}`));
+  const secondaryScoreField = primaryScoreField === "momentum_score" ? "risk_adjusted_score" : "momentum_score";
+  addCell(row, number(item[primaryScoreField], 1), "score");
+  addCell(row, number(item[secondaryScoreField], 1), "score");
+  addCell(row, percent(item.annualized_volatility_20d), "number");
+  const riskCell = node("td"); riskCell.append(volatilityBadge(item.volatility_risk)); row.append(riskCell);
+  ["return_5d", "return_20d", "return_60d", "return_120d"].forEach((key) => addCell(row, percent(item[key]), `number ${trendClass(item[key])}`));
   addCell(row, value(item.exchange)); addCell(row, value(item.as_of), "number muted"); return row;
 }
 
 function renderMomentum() {
   const rows = state.data.momentum.filter(matches);
-  $("#momentum-meta").textContent = `${rows.length} 品种 · 多空双榜`;
-  $("#momentum-long-table").replaceChildren(...directionalRows(rows, "long_rank").map((item) => momentumRow(item, "long_rank")));
-  $("#momentum-short-table").replaceChildren(...directionalRows(rows, "short_rank").map((item) => momentumRow(item, "short_rank")));
+  $("#momentum-meta").textContent = `${rows.length} 品种 · 原始/风险调整四榜`;
+  $("#momentum-long-table").replaceChildren(...directionalRows(rows, "long_rank").map((item) => momentumRow(item, "long_rank", "momentum_score")));
+  $("#momentum-short-table").replaceChildren(...directionalRows(rows, "short_rank").map((item) => momentumRow(item, "short_rank", "momentum_score")));
+  $("#momentum-risk-long-table").replaceChildren(...directionalRows(rows, "risk_long_rank").map((item) => momentumRow(item, "risk_long_rank", "risk_adjusted_score")));
+  $("#momentum-risk-short-table").replaceChildren(...directionalRows(rows, "risk_short_rank").map((item) => momentumRow(item, "risk_short_rank", "risk_adjusted_score")));
 }
 
-function sectorRow(item, rankField) {
+function sectorRow(item, rankField, primaryScoreField) {
   const row = node("tr");
   addCell(row, String(item[rankField] ?? "-").padStart(2, "0"), "rank");
   addCell(row, value(item.sector));
   addCell(row, integer(item.constituents), "number");
-  addCell(row, number(item.sector_momentum_score, 1), "score");
+  const secondaryScoreField = primaryScoreField === "sector_momentum_score" ? "sector_risk_adjusted_score" : "sector_momentum_score";
+  addCell(row, number(item[primaryScoreField], 1), "score");
+  addCell(row, number(item[secondaryScoreField], 1), "score");
+  addCell(row, percent(item.sector_mean_annualized_volatility_20d), "number");
+  const riskCell = node("td"); riskCell.append(volatilityBadge(item.sector_volatility_risk)); row.append(riskCell);
   ["sector_return_5d", "sector_return_20d", "sector_return_60d", "sector_return_120d"].forEach((key) => addCell(row, percent(item[key]), `number ${trendClass(item[key])}`));
   addCell(row, value(item.as_of), "number muted");
   return row;
@@ -239,9 +259,11 @@ function sectorRow(item, rankField) {
 
 function renderSectors() {
   const rows = state.data.sectors.filter(matches);
-  $("#sectors-meta").textContent = `${rows.length} 板块 · 多空双榜`;
-  $("#sectors-long-table").replaceChildren(...directionalRows(rows, "sector_long_rank").map((item) => sectorRow(item, "sector_long_rank")));
-  $("#sectors-short-table").replaceChildren(...directionalRows(rows, "sector_short_rank").map((item) => sectorRow(item, "sector_short_rank")));
+  $("#sectors-meta").textContent = `${rows.length} 板块 · 原始/风险调整四榜`;
+  $("#sectors-long-table").replaceChildren(...directionalRows(rows, "sector_long_rank").map((item) => sectorRow(item, "sector_long_rank", "sector_momentum_score")));
+  $("#sectors-short-table").replaceChildren(...directionalRows(rows, "sector_short_rank").map((item) => sectorRow(item, "sector_short_rank", "sector_momentum_score")));
+  $("#sectors-risk-long-table").replaceChildren(...directionalRows(rows, "sector_risk_long_rank").map((item) => sectorRow(item, "sector_risk_long_rank", "sector_risk_adjusted_score")));
+  $("#sectors-risk-short-table").replaceChildren(...directionalRows(rows, "sector_risk_short_rank").map((item) => sectorRow(item, "sector_risk_short_rank", "sector_risk_adjusted_score")));
 }
 
 function renderTasks() {

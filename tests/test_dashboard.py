@@ -34,13 +34,17 @@ class DashboardDataTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (output / "momentum_latest.csv").write_text(
-                "code,name,as_of,momentum_score,return_5d,return_20d\n"
-                "rb6666,螺纹钢指数,2026-07-14,88.5,3.2,7.1\n",
+                "code,name,as_of,momentum_score,return_5d,return_20d,"
+                "risk_adjusted_score,risk_long_rank,annualized_volatility_20d,"
+                "volatility_risk\n"
+                "rb6666,螺纹钢指数,2026-07-14,88.5,3.2,7.1,91.2,1,18.4,偏高\n",
                 encoding="utf-8",
             )
             (output / "sector_momentum_latest.csv").write_text(
-                "sector,constituents,as_of,sector_return_5d,sector_momentum_score\n"
-                "黑色,10,2026-07-14,2.4,90.9\n",
+                "sector,constituents,as_of,sector_return_5d,sector_momentum_score,"
+                "sector_risk_adjusted_score,sector_risk_long_rank,"
+                "sector_mean_annualized_volatility_20d,sector_volatility_risk\n"
+                "黑色,10,2026-07-14,2.4,90.9,92.1,1,16.8,常态\n",
                 encoding="utf-8",
             )
             scheduler_db = output / "scheduler" / "runs.db"
@@ -77,7 +81,12 @@ class DashboardDataTests(unittest.TestCase):
             self.assertEqual(payload["intraday"][0]["turnover_15m_yi"], 12.5)
             self.assertEqual(payload["options"][0]["dte"], 12)
             self.assertEqual(payload["momentum"][0]["momentum_score"], 88.5)
+            self.assertEqual(payload["momentum"][0]["risk_adjusted_score"], 91.2)
+            self.assertEqual(payload["momentum"][0]["volatility_risk"], "偏高")
             self.assertEqual(payload["sectors"][0]["sector"], "黑色")
+            self.assertEqual(
+                payload["sectors"][0]["sector_risk_adjusted_score"], 92.1
+            )
             self.assertEqual(payload["tasks"][0]["status"], "success")
             serialized = json.dumps(payload, ensure_ascii=False, allow_nan=False)
             self.assertNotIn("secret-123", serialized)
@@ -196,17 +205,44 @@ class DashboardAssetTests(unittest.TestCase):
         self.assertIn('id="sectors-table"', index)
         self.assertIn('id="momentum-long-table"', index)
         self.assertIn('id="momentum-short-table"', index)
+        self.assertIn('id="momentum-risk-long-table"', index)
+        self.assertIn('id="momentum-risk-short-table"', index)
         self.assertIn('id="sectors-long-table"', index)
         self.assertIn('id="sectors-short-table"', index)
+        self.assertIn('id="sectors-risk-long-table"', index)
+        self.assertIn('id="sectors-risk-short-table"', index)
         self.assertIn("function renderSectors()", script)
         self.assertIn("sector_momentum_score", script)
         self.assertIn("long_rank", script)
         self.assertIn("short_rank", script)
         self.assertIn("期权分 / 确认分", index)
-        self.assertIn('/assets/dashboard.css?v=20260721-2', index)
-        self.assertIn('/assets/dashboard.js?v=20260721-2', index)
+        self.assertIn("risk_adjusted_score", script)
+        self.assertIn("risk_long_rank", script)
+        self.assertIn("risk_short_rank", script)
+        self.assertIn("annualized_volatility_20d", script)
+        self.assertIn("volatility_risk", script)
+        self.assertIn('input === null || input === undefined || input === ""', script)
+        self.assertIn("风险调整多头强势榜", index)
+        self.assertIn("风险调整空头弱势榜", index)
+        self.assertIn("原始动量多头强势榜", index)
+        self.assertIn("原始动量空头弱势榜", index)
+        self.assertIn('directionalRows(rows, "long_rank")', script)
+        self.assertIn('directionalRows(rows, "short_rank")', script)
+        self.assertIn('directionalRows(rows, "risk_long_rank")', script)
+        self.assertIn('directionalRows(rows, "risk_short_rank")', script)
+        self.assertIn('/assets/dashboard.css?v=20260721-6', index)
+        self.assertIn('/assets/dashboard.js?v=20260721-6', index)
         self.assertIn(".table-card>.card-head{padding:", stylesheet)
         self.assertIn(".table-card+.table-card{margin-top:", stylesheet)
+        self.assertIn(".risk-badge.high{", stylesheet)
+        self.assertIn(".risk-badge.elevated{", stylesheet)
+        self.assertIn(".risk-badge.normal{", stylesheet)
+        self.assertIn(".risk-badge.unknown{", stylesheet)
+        self.assertIn(
+            'type === "momentum" ? directionalRows(rows, "risk_long_rank") : rows',
+            script,
+        )
+        self.assertIn('risk === "常态" ? "normal" : "unknown"', script)
         self.assertIn('id="global-search"', index)
         self.assertIn('id="refresh-button"', index)
         self.assertIn("/api/dashboard", script)

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 import re
 
+import numpy as np
 import pandas as pd
 
 from sectors import commodity_sector
@@ -12,6 +13,8 @@ from sectors import commodity_sector
 
 COMMODITY_EXCHANGES = frozenset({"SHFE", "DCE", "CZCE", "INE", "GFEX"})
 RETURN_INDEX_CODE = re.compile(r"^[A-Za-z]+6666$")
+TRADING_DAYS_PER_YEAR = 252
+VOLATILITY_FLOOR_PCT = 0.01
 
 
 def select_commodity_return_indices(instruments):
@@ -85,8 +88,12 @@ def build_momentum_ranking(
     for code, source in frames.items():
         if source is None or "close" not in source:
             continue
-        closes = pd.to_numeric(source["close"], errors="coerce").dropna()
-        if len(closes) < required or (closes.iloc[-required:] <= 0).any():
+        closes = pd.to_numeric(source["close"], errors="coerce")
+        if len(closes) < required:
+            continue
+        closes = closes.iloc[-required:]
+        close_values = closes.to_numpy(dtype=float)
+        if not np.isfinite(close_values).all() or (close_values <= 0).any():
             continue
         info = metadata.get(code, {})
         row = {
@@ -96,11 +103,35 @@ def build_momentum_ranking(
             "sector": commodity_sector(code),
             "as_of": source["datetime"].iloc[-1] if "datetime" in source else pd.NaT,
         }
-        for horizon in horizons:
-            row[f"return_{horizon}d"] = (
-                closes.iloc[-1] / closes.iloc[-horizon - 1] - 1
-            ) * 100
-        rows.append(row)
+        valid = True
+        with np.errstate(all="ignore"):
+            for horizon in horizons:
+                horizon_return = float(
+                    (closes.iloc[-1] / closes.iloc[-horizon - 1] - 1) * 100
+                )
+                daily_returns = closes.pct_change(fill_method=None).iloc[-horizon:]
+                annualized_volatility = (
+                    float(
+                        daily_returns.std(ddof=1)
+                        * (TRADING_DAYS_PER_YEAR ** 0.5)
+                        * 100
+                    )
+                    if len(daily_returns) > 1
+                    else 0.0
+                )
+                risk_adjusted = horizon_return / max(
+                    annualized_volatility, VOLATILITY_FLOOR_PCT
+                )
+                if not np.isfinite(
+                    [horizon_return, annualized_volatility, risk_adjusted]
+                ).all():
+                    valid = False
+                    break
+                row[f"return_{horizon}d"] = horizon_return
+                row[f"annualized_volatility_{horizon}d"] = annualized_volatility
+                row[f"risk_adjusted_{horizon}d"] = risk_adjusted
+        if valid:
+            rows.append(row)
 
     return_columns = ["code", "name", "exchange", "sector", "as_of"]
     for horizon in horizons:
@@ -108,8 +139,13 @@ def build_momentum_ranking(
             f"return_{horizon}d", f"excess_{horizon}d", f"rank_{horizon}d",
             f"sector_return_{horizon}d", f"sector_excess_{horizon}d",
             f"sector_rank_{horizon}d",
+            f"annualized_volatility_{horizon}d", f"risk_adjusted_{horizon}d",
         ])
-    return_columns.extend(["momentum_score", "long_rank", "short_rank"])
+    return_columns.extend([
+        "momentum_score", "long_rank", "short_rank",
+        "risk_adjusted_score", "risk_long_rank", "risk_short_rank",
+        "volatility_score", "volatility_risk",
+    ])
     if not rows:
         return pd.DataFrame(columns=return_columns)
 
@@ -143,6 +179,33 @@ def build_momentum_ranking(
     result["short_rank"] = result["momentum_score"].rank(
         method="min", ascending=True
     ).astype(int)
+    risk_percentile_columns = []
+    for horizon in horizons:
+        pct_col = f"_risk_pct_{horizon}d"
+        result[pct_col] = result[f"risk_adjusted_{horizon}d"].rank(pct=True)
+        risk_percentile_columns.append(pct_col)
+    result["risk_adjusted_score"] = (
+        result[risk_percentile_columns].mean(axis=1) * 100
+    )
+    result["risk_long_rank"] = result["risk_adjusted_score"].rank(
+        method="min", ascending=False
+    ).astype(int)
+    result["risk_short_rank"] = result["risk_adjusted_score"].rank(
+        method="min", ascending=True
+    ).astype(int)
+    volatility_percentile_columns = []
+    for horizon in horizons:
+        pct_col = f"_volatility_pct_{horizon}d"
+        result[pct_col] = result[f"annualized_volatility_{horizon}d"].rank(
+            pct=True
+        )
+        volatility_percentile_columns.append(pct_col)
+    result["volatility_score"] = (
+        result[volatility_percentile_columns].mean(axis=1) * 100
+    )
+    result["volatility_risk"] = result["volatility_score"].map(
+        lambda score: "高波动" if score >= 90 else "偏高" if score >= 75 else "常态"
+    )
     result = result.sort_values(
         ["momentum_score", f"return_{horizons[0]}d", "code"],
         ascending=[False, False, True],
@@ -160,19 +223,49 @@ def build_sector_ranking(
         raise ValueError("horizons must contain positive integers")
     columns = ["sector", "constituents", "as_of"]
     for horizon in horizons:
-        columns.extend([f"sector_return_{horizon}d", f"sector_rank_{horizon}d"])
+        columns.extend([
+            f"sector_return_{horizon}d", f"sector_rank_{horizon}d",
+            f"sector_mean_annualized_volatility_{horizon}d",
+            f"sector_risk_adjusted_{horizon}d",
+        ])
     columns.extend([
-        "sector_momentum_score", "sector_long_rank", "sector_short_rank"
+        "sector_momentum_score", "sector_long_rank", "sector_short_rank",
+        "sector_risk_adjusted_score", "sector_risk_long_rank",
+        "sector_risk_short_rank", "sector_volatility_score",
+        "sector_volatility_risk",
     ])
     if product_ranking.empty:
         return pd.DataFrame(columns=columns)
 
     required = {"sector", "code", "as_of"} | {
         f"return_{horizon}d" for horizon in horizons
+    } | {
+        f"annualized_volatility_{horizon}d" for horizon in horizons
+    } | {
+        f"risk_adjusted_{horizon}d" for horizon in horizons
     }
     missing = sorted(required - set(product_ranking.columns))
     if missing:
         raise ValueError(f"product ranking missing columns: {', '.join(missing)}")
+
+    numeric_columns = [
+        column for column in required if column not in {"sector", "code", "as_of"}
+    ]
+    valid_products = product_ranking.copy()
+    valid_products.loc[:, numeric_columns] = valid_products.loc[
+        :, numeric_columns
+    ].apply(pd.to_numeric, errors="coerce")
+    finite_mask = np.isfinite(
+        valid_products.loc[:, numeric_columns].to_numpy(dtype=float)
+    ).all(axis=1)
+    identity_mask = (
+        valid_products["sector"].notna()
+        & valid_products["code"].notna()
+        & valid_products["as_of"].notna()
+    )
+    valid_products = valid_products.loc[finite_mask & identity_mask].copy()
+    if valid_products.empty:
+        return pd.DataFrame(columns=columns)
 
     aggregations = {
         "constituents": ("code", "nunique"),
@@ -182,8 +275,14 @@ def build_sector_ranking(
         aggregations[f"sector_return_{horizon}d"] = (
             f"return_{horizon}d", "mean"
         )
+        aggregations[f"sector_mean_annualized_volatility_{horizon}d"] = (
+            f"annualized_volatility_{horizon}d", "mean"
+        )
+        aggregations[f"sector_risk_adjusted_{horizon}d"] = (
+            f"risk_adjusted_{horizon}d", "mean"
+        )
     result = pd.DataFrame(
-        product_ranking.groupby("sector", as_index=False).agg(**aggregations)
+        valid_products.groupby("sector", as_index=False).agg(**aggregations)
     )
     percentile_columns = []
     for horizon in horizons:
@@ -205,6 +304,36 @@ def build_sector_ranking(
     result.loc[:, "sector_short_rank"] = result[
         "sector_momentum_score"
     ].rank(method="min", ascending=True).astype(int)
+    risk_percentile_columns = []
+    volatility_percentile_columns = []
+    for horizon in horizons:
+        risk_pct_col = f"_sector_risk_pct_{horizon}d"
+        result.loc[:, risk_pct_col] = result[
+            f"sector_risk_adjusted_{horizon}d"
+        ].rank(pct=True)
+        risk_percentile_columns.append(risk_pct_col)
+        volatility_pct_col = f"_sector_volatility_pct_{horizon}d"
+        result.loc[:, volatility_pct_col] = result[
+            f"sector_mean_annualized_volatility_{horizon}d"
+        ].rank(pct=True)
+        volatility_percentile_columns.append(volatility_pct_col)
+    result.loc[:, "sector_risk_adjusted_score"] = (
+        result.loc[:, risk_percentile_columns].mean(axis=1) * 100
+    )
+    result.loc[:, "sector_risk_long_rank"] = result[
+        "sector_risk_adjusted_score"
+    ].rank(method="min", ascending=False).astype(int)
+    result.loc[:, "sector_risk_short_rank"] = result[
+        "sector_risk_adjusted_score"
+    ].rank(method="min", ascending=True).astype(int)
+    result.loc[:, "sector_volatility_score"] = (
+        result.loc[:, volatility_percentile_columns].mean(axis=1) * 100
+    )
+    result.loc[:, "sector_volatility_risk"] = result[
+        "sector_volatility_score"
+    ].map(
+        lambda score: "高波动" if score >= 90 else "偏高" if score >= 75 else "常态"
+    )
     result = result.sort_values(
         by=["sector_momentum_score", f"sector_return_{horizons[0]}d", "sector"],
         ascending=[False, False, True],

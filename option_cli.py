@@ -134,7 +134,11 @@ def parse_args(argv=None):
     )
     parser.add_argument(
         "--snapshot-csv", type=Path,
-        help="保存未经过模式和增量过滤的完整期权快照",
+        help="保存未经过模式和增量过滤的完整期权候选池",
+    )
+    parser.add_argument(
+        "--filtered-csv", type=Path,
+        help="保存经过模式过滤、但未经过增量过滤的当前有效信号",
     )
     parser.add_argument("--csv", type=Path)
     return parser.parse_args(argv)
@@ -142,15 +146,17 @@ def parse_args(argv=None):
 
 def main(argv=None):
     args = parse_args(argv)
-    result = scan_near_expiry_options(
+    snapshot = scan_near_expiry_options(
         QuoteClient(), min_dte=args.min_dte, max_dte=args.max_dte,
         strikes_per_side=args.strikes, max_moneyness=args.max_moneyness,
         min_volume=args.min_volume, min_open_interest=args.min_open_interest,
     )
     if args.snapshot_csv:
-        atomic_to_csv(result, args.snapshot_csv, index=False, encoding="utf-8-sig")
-    filtered = filter_signal_mode(result, args.mode)
+        atomic_to_csv(snapshot, args.snapshot_csv, index=False, encoding="utf-8-sig")
+    filtered = filter_signal_mode(snapshot, args.mode)
     matched_count = len(filtered)
+    if args.filtered_csv:
+        atomic_to_csv(filtered, args.filtered_csv, index=False, encoding="utf-8-sig")
     if args.new_only:
         filtered = filter_incremental_signals(
             filtered, args.mode, args.state_file
@@ -158,7 +164,7 @@ def main(argv=None):
     if args.csv:
         atomic_to_csv(filtered, args.csv, index=False, encoding="utf-8-sig")
     summary = (
-        f"临期期权可分析 {len(result)} 个；模式 {args.mode} 命中 {matched_count} 个"
+        f"临期期权可分析 {len(snapshot)} 个；模式 {args.mode} 命中 {matched_count} 个"
     )
     if args.new_only:
         summary += f"；新增或变化 {len(filtered)} 个"

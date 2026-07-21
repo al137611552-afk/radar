@@ -18,6 +18,23 @@ def frame(closes, start="2026-01-01"):
 
 
 class MomentumRankingTests(unittest.TestCase):
+    def test_assigns_separate_long_and_short_momentum_ranks(self):
+        result = ranking.build_momentum_ranking(
+            {
+                "au6666": frame([100, 110, 120]),
+                "rb6666": frame([100, 100, 100]),
+                "br6666": frame([100, 90, 80]),
+            },
+            horizons=(2,),
+        ).set_index("code")
+
+        self.assertEqual(result.loc["au6666", "long_rank"], 1)
+        self.assertEqual(result.loc["rb6666", "long_rank"], 2)
+        self.assertEqual(result.loc["br6666", "long_rank"], 3)
+        self.assertEqual(result.loc["br6666", "short_rank"], 1)
+        self.assertEqual(result.loc["rb6666", "short_rank"], 2)
+        self.assertEqual(result.loc["au6666", "short_rank"], 3)
+
     def test_ranks_return_and_cross_sectional_excess(self):
         frames = {
             "au6666": frame([100, 110, 121]),
@@ -77,6 +94,23 @@ class MomentumRankingTests(unittest.TestCase):
         self.assertEqual(result["sector_rank_2d"].tolist(), [1, 2])
         self.assertAlmostEqual(result.loc[0, "sector_momentum_score"], 100.0)
         self.assertAlmostEqual(result.loc[1, "sector_momentum_score"], 50.0)
+
+    def test_assigns_separate_sector_long_and_short_ranks(self):
+        product_ranking = ranking.build_momentum_ranking(
+            {
+                "au6666": frame([100, 110, 120]),
+                "rb6666": frame([100, 100, 100]),
+                "br6666": frame([100, 90, 80]),
+            },
+            horizons=(2,),
+        )
+
+        result = ranking.build_sector_ranking(
+            product_ranking, horizons=(2,)
+        ).set_index("sector")
+
+        self.assertEqual(result.loc["贵金属", "sector_long_rank"], 1)
+        self.assertEqual(result.loc["能源化工", "sector_short_rank"], 1)
 
     def test_discovers_only_official_commodity_return_indices(self):
         instruments = [

@@ -18,6 +18,7 @@ def build_display_table(result: pd.DataFrame, horizons=DEFAULT_HORIZONS):
     names = {
         "code": "代码", "name": "名称", "sector": "板块", "as_of": "数据截止",
         "momentum_score": "综合动量分",
+        "long_rank": "多头排名", "short_rank": "空头排名",
     }
     for horizon in horizons:
         columns.extend([
@@ -33,7 +34,7 @@ def build_display_table(result: pd.DataFrame, horizons=DEFAULT_HORIZONS):
             f"sector_excess_{horizon}d": f"{horizon}日板块超额%",
             f"sector_rank_{horizon}d": f"{horizon}日板块排名",
         })
-    columns.append("momentum_score")
+    columns.extend(["momentum_score", "long_rank", "short_rank"])
     display = result.loc[:, columns].rename(columns=names).copy()
     display["数据截止"] = pd.to_datetime(display["数据截止"]).dt.strftime("%Y-%m-%d")
     float_columns = display.select_dtypes(include="number").columns
@@ -50,6 +51,7 @@ def build_sector_display_table(result: pd.DataFrame, horizons=DEFAULT_HORIZONS):
     names = {
         "sector": "板块", "constituents": "品种数", "as_of": "数据截止",
         "sector_momentum_score": "板块动量分",
+        "sector_long_rank": "多头排名", "sector_short_rank": "空头排名",
     }
     for horizon in horizons:
         columns.extend([
@@ -59,7 +61,9 @@ def build_sector_display_table(result: pd.DataFrame, horizons=DEFAULT_HORIZONS):
             f"sector_return_{horizon}d": f"{horizon}日板块收益%",
             f"sector_rank_{horizon}d": f"{horizon}日板块排名",
         })
-    columns.append("sector_momentum_score")
+    columns.extend([
+        "sector_momentum_score", "sector_long_rank", "sector_short_rank"
+    ])
     display = result.loc[:, columns].rename(columns=names).copy()
     display["数据截止"] = pd.to_datetime(display["数据截止"]).dt.strftime("%Y-%m-%d")
     float_columns = display.select_dtypes(include="number").columns
@@ -105,11 +109,24 @@ def main(argv=None):
             sector_result, args.sector_csv, index=False, encoding="utf-8-sig"
         )
     display = build_display_table(result, args.horizons)
+    long_display = display.sort_values(["多头排名", "代码"])
+    short_display = display.sort_values(["空头排名", "代码"])
     if args.top > 0:
-        display = display.head(args.top)
-    print(display.to_string(index=False))
-    print("\n板块动量榜：")
-    print(build_sector_display_table(sector_result, args.horizons).to_string(index=False))
+        long_display = long_display.head(args.top)
+        short_display = short_display.head(args.top)
+    print("多头强势榜：")
+    print(long_display.to_string(index=False))
+    print("\n空头弱势榜：")
+    print(short_display.to_string(index=False))
+    sector_display = build_sector_display_table(sector_result, args.horizons)
+    print("\n板块多头强势榜：")
+    print(
+        sector_display.sort_values(["多头排名", "板块"]).to_string(index=False)
+    )
+    print("\n板块空头弱势榜：")
+    print(
+        sector_display.sort_values(["空头排名", "板块"]).to_string(index=False)
+    )
     print(
         f"\n有效商品品种：{len(result)}；板块：{len(sector_result)}；"
         "全商品与板块基准均为当前有效成分等权平均。"

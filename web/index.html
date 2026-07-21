@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>Watchman · 期货监控台</title>
-  <link rel="stylesheet" href="/assets/dashboard.css">
-  <script src="/assets/dashboard.js" defer></script>
+  <link rel="stylesheet" href="/assets/dashboard.css?v=20260721-2">
+  <script src="/assets/dashboard.js?v=20260721-2" defer></script>
 </head>
 <body>
   <div class="app-shell">
@@ -77,17 +77,21 @@
 
       <section class="panel" data-panel="options">
         <div class="section-intro"><div><p class="eyebrow">DOUBLE CONFIRMATION</p><h2>临期期权信号</h2><p>期权技术信号与标的趋势双确认，聚焦流动性合格的近平值合约。</p></div><span id="options-meta" class="count-badge">0 信号</span></div>
-        <article class="table-card"><div class="table-scroll"><table><thead><tr><th>期权合约</th><th>类型</th><th>DTE</th><th>标的</th><th>行权价</th><th>最新价</th><th>信号</th><th>成交量</th><th>持仓量</th><th>K线时间</th></tr></thead><tbody id="options-table"></tbody></table></div></article>
+        <article class="table-card"><div class="table-scroll"><table><thead><tr><th>期权合约</th><th>类型</th><th>DTE</th><th>标的</th><th>行权价</th><th>最新价</th><th>期权分 / 确认分</th><th>成交量</th><th>持仓量</th><th>K线时间</th></tr></thead><tbody id="options-table"></tbody></table></div></article>
       </section>
 
       <section class="panel" data-panel="momentum">
-        <div class="section-intro"><div><p class="eyebrow">CROSS-SECTIONAL MOMENTUM</p><h2>商品动量排名</h2><p>多周期横截面强弱评分，辅助识别趋势领先与落后品种。</p></div><span id="momentum-meta" class="count-badge">0 品种</span></div>
-        <article class="table-card"><div class="table-scroll"><table><thead><tr><th>排名</th><th>品种</th><th>板块</th><th>综合分</th><th>5日</th><th>20日</th><th>20日板块超额</th><th>60日</th><th>120日</th><th>交易所</th><th>日期</th></tr></thead><tbody id="momentum-table"></tbody></table></div></article>
+        <div class="section-intro"><div><p class="eyebrow">CROSS-SECTIONAL MOMENTUM</p><h2>商品多空动量排名</h2><p>同一横截面双向排序：高分品种进入多头强势榜，低分品种进入空头弱势榜。</p></div><span id="momentum-meta" class="count-badge">0 品种</span></div>
+        <article class="table-card"><div class="card-head"><div><p class="eyebrow">LONG MOMENTUM</p><h3>多头强势榜</h3></div></div><div class="table-scroll"><table><thead><tr><th>多头排名</th><th>品种</th><th>板块</th><th>综合分</th><th>5日</th><th>20日</th><th>20日板块超额</th><th>60日</th><th>120日</th><th>交易所</th><th>日期</th></tr></thead><tbody id="momentum-long-table"></tbody></table></div></article>
+        <article class="table-card"><div class="card-head"><div><p class="eyebrow">SHORT MOMENTUM</p><h3>空头弱势榜</h3></div></div><div class="table-scroll"><table><thead><tr><th>空头排名</th><th>品种</th><th>板块</th><th>综合分</th><th>5日</th><th>20日</th><th>20日板块超额</th><th>60日</th><th>120日</th><th>交易所</th><th>日期</th></tr></thead><tbody id="momentum-short-table"></tbody></table></div></article>
       </section>
 
       <section class="panel" data-panel="sectors">
-        <div class="section-intro"><div><p class="eyebrow">SECTOR RELATIVE STRENGTH</p><h2>板块动量排名</h2><p>按板块有效成分等权聚合多周期收益，识别市场主线与板块轮动。</p></div><span id="sectors-meta" class="count-badge">0 板块</span></div>
-        <article class="table-card"><div class="table-scroll"><table><thead><tr><th>排名</th><th>板块</th><th>成分数</th><th>板块动量分</th><th>5日</th><th>20日</th><th>60日</th><th>120日</th><th>日期</th></tr></thead><tbody id="sectors-table"></tbody></table></div></article>
+        <div class="section-intro"><div><p class="eyebrow">SECTOR RELATIVE STRENGTH</p><h2>板块多空动量排名</h2><p>板块有效成分等权聚合后分别展示强势与弱势方向。</p></div><span id="sectors-meta" class="count-badge">0 板块</span></div>
+        <div id="sectors-table">
+          <article class="table-card"><div class="card-head"><div><p class="eyebrow">LONG SECTORS</p><h3>板块多头强势榜</h3></div></div><div class="table-scroll"><table><thead><tr><th>多头排名</th><th>板块</th><th>成分数</th><th>板块动量分</th><th>5日</th><th>20日</th><th>60日</th><th>120日</th><th>日期</th></tr></thead><tbody id="sectors-long-table"></tbody></table></div></article>
+          <article class="table-card"><div class="card-head"><div><p class="eyebrow">SHORT SECTORS</p><h3>板块空头弱势榜</h3></div></div><div class="table-scroll"><table><thead><tr><th>空头排名</th><th>板块</th><th>成分数</th><th>板块动量分</th><th>5日</th><th>20日</th><th>60日</th><th>120日</th><th>日期</th></tr></thead><tbody id="sectors-short-table"></tbody></table></div></article>
+        </div>
       </section>
 
       <section class="panel" data-panel="tasks">

@@ -109,7 +109,7 @@ def build_momentum_ranking(
             f"sector_return_{horizon}d", f"sector_excess_{horizon}d",
             f"sector_rank_{horizon}d",
         ])
-    return_columns.append("momentum_score")
+    return_columns.extend(["momentum_score", "long_rank", "short_rank"])
     if not rows:
         return pd.DataFrame(columns=return_columns)
 
@@ -137,6 +137,12 @@ def build_momentum_ranking(
         percentile_columns.append(pct_col)
 
     result["momentum_score"] = result[percentile_columns].mean(axis=1) * 100
+    result["long_rank"] = result["momentum_score"].rank(
+        method="min", ascending=False
+    ).astype(int)
+    result["short_rank"] = result["momentum_score"].rank(
+        method="min", ascending=True
+    ).astype(int)
     result = result.sort_values(
         ["momentum_score", f"return_{horizons[0]}d", "code"],
         ascending=[False, False, True],
@@ -155,7 +161,9 @@ def build_sector_ranking(
     columns = ["sector", "constituents", "as_of"]
     for horizon in horizons:
         columns.extend([f"sector_return_{horizon}d", f"sector_rank_{horizon}d"])
-    columns.append("sector_momentum_score")
+    columns.extend([
+        "sector_momentum_score", "sector_long_rank", "sector_short_rank"
+    ])
     if product_ranking.empty:
         return pd.DataFrame(columns=columns)
 
@@ -191,6 +199,12 @@ def build_sector_ranking(
     result.loc[:, "sector_momentum_score"] = (
         result.loc[:, percentile_columns].mean(axis=1) * 100
     )
+    result.loc[:, "sector_long_rank"] = result[
+        "sector_momentum_score"
+    ].rank(method="min", ascending=False).astype(int)
+    result.loc[:, "sector_short_rank"] = result[
+        "sector_momentum_score"
+    ].rank(method="min", ascending=True).astype(int)
     result = result.sort_values(
         by=["sector_momentum_score", f"sector_return_{horizons[0]}d", "sector"],
         ascending=[False, False, True],

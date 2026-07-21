@@ -21,7 +21,16 @@ class SchedulerCliTests(unittest.TestCase):
         handlers = scheduler_cli.build_handlers(Path("/project"), Path("/logs"))
 
         self.assertIn("output/intraday_latest.csv", handlers["intraday"].command)
-        self.assertIn("output/options_latest.csv", handlers["options"].command)
+        option_command = handlers["options"].command
+        self.assertIn("output/options_latest.csv", option_command)
+        self.assertEqual(
+            option_command[option_command.index("--snapshot-csv") + 1],
+            "output/options_candidates_latest.csv",
+        )
+        self.assertEqual(
+            option_command[option_command.index("--filtered-csv") + 1],
+            "output/options_latest.csv",
+        )
         self.assertIn("output/momentum_latest.csv", handlers["momentum"].command)
         self.assertIn("output/sector_momentum_latest.csv", handlers["momentum"].command)
         self.assertEqual(handlers["momentum"].command[0], sys.executable)

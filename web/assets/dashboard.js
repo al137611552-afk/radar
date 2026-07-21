@@ -200,34 +200,48 @@ function renderOptions() {
   }));
 }
 
+function directionalRows(rows, rankField) {
+  return rows.slice().sort((left, right) => {
+    const leftRank = Number(left[rankField] ?? Number.POSITIVE_INFINITY);
+    const rightRank = Number(right[rankField] ?? Number.POSITIVE_INFINITY);
+    return leftRank - rightRank || String(left.code ?? left.sector).localeCompare(String(right.code ?? right.sector));
+  });
+}
+
+function momentumRow(item, rankField) {
+  const row = node("tr"); addCell(row, String(item[rankField] ?? "-").padStart(2, "0"), "rank");
+  const instrumentCell = node("td"); const instrument = node("div", "instrument"); instrument.append(node("strong", "", value(item.name, item.code)), node("small", "", value(item.code))); instrumentCell.append(instrument); row.append(instrumentCell);
+  addCell(row, value(item.sector));
+  addCell(row, number(item.momentum_score, 1), "score");
+  ["return_5d", "return_20d"].forEach((key) => addCell(row, percent(item[key]), `number ${trendClass(item[key])}`));
+  addCell(row, percent(item.sector_excess_20d), `number ${trendClass(item.sector_excess_20d)}`);
+  ["return_60d", "return_120d"].forEach((key) => addCell(row, percent(item[key]), `number ${trendClass(item[key])}`));
+  addCell(row, value(item.exchange)); addCell(row, value(item.as_of), "number muted"); return row;
+}
+
 function renderMomentum() {
   const rows = state.data.momentum.filter(matches);
-  $("#momentum-meta").textContent = `${rows.length} 品种`;
-  $("#momentum-table").replaceChildren(...rows.map((item, index) => {
-    const row = node("tr"); addCell(row, String(index + 1).padStart(2, "0"), "rank");
-    const instrumentCell = node("td"); const instrument = node("div", "instrument"); instrument.append(node("strong", "", value(item.name, item.code)), node("small", "", value(item.code))); instrumentCell.append(instrument); row.append(instrumentCell);
-    addCell(row, value(item.sector));
-    addCell(row, number(item.momentum_score, 1), "score");
-    ["return_5d", "return_20d"].forEach((key) => addCell(row, percent(item[key]), `number ${trendClass(item[key])}`));
-    addCell(row, percent(item.sector_excess_20d), `number ${trendClass(item.sector_excess_20d)}`);
-    ["return_60d", "return_120d"].forEach((key) => addCell(row, percent(item[key]), `number ${trendClass(item[key])}`));
-    addCell(row, value(item.exchange)); addCell(row, value(item.as_of), "number muted"); return row;
-  }));
+  $("#momentum-meta").textContent = `${rows.length} 品种 · 多空双榜`;
+  $("#momentum-long-table").replaceChildren(...directionalRows(rows, "long_rank").map((item) => momentumRow(item, "long_rank")));
+  $("#momentum-short-table").replaceChildren(...directionalRows(rows, "short_rank").map((item) => momentumRow(item, "short_rank")));
+}
+
+function sectorRow(item, rankField) {
+  const row = node("tr");
+  addCell(row, String(item[rankField] ?? "-").padStart(2, "0"), "rank");
+  addCell(row, value(item.sector));
+  addCell(row, integer(item.constituents), "number");
+  addCell(row, number(item.sector_momentum_score, 1), "score");
+  ["sector_return_5d", "sector_return_20d", "sector_return_60d", "sector_return_120d"].forEach((key) => addCell(row, percent(item[key]), `number ${trendClass(item[key])}`));
+  addCell(row, value(item.as_of), "number muted");
+  return row;
 }
 
 function renderSectors() {
   const rows = state.data.sectors.filter(matches);
-  $("#sectors-meta").textContent = `${rows.length} 板块`;
-  $("#sectors-table").replaceChildren(...rows.map((item, index) => {
-    const row = node("tr");
-    addCell(row, String(index + 1).padStart(2, "0"), "rank");
-    addCell(row, value(item.sector));
-    addCell(row, integer(item.constituents), "number");
-    addCell(row, number(item.sector_momentum_score, 1), "score");
-    ["sector_return_5d", "sector_return_20d", "sector_return_60d", "sector_return_120d"].forEach((key) => addCell(row, percent(item[key]), `number ${trendClass(item[key])}`));
-    addCell(row, value(item.as_of), "number muted");
-    return row;
-  }));
+  $("#sectors-meta").textContent = `${rows.length} 板块 · 多空双榜`;
+  $("#sectors-long-table").replaceChildren(...directionalRows(rows, "sector_long_rank").map((item) => sectorRow(item, "sector_long_rank")));
+  $("#sectors-short-table").replaceChildren(...directionalRows(rows, "sector_short_rank").map((item) => sectorRow(item, "sector_short_rank")));
 }
 
 function renderTasks() {

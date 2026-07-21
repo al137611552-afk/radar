@@ -108,7 +108,8 @@ def build_handlers(project_dir: Path, log_dir: Path, timeout: int = 300):
             [
                 python, "option_cli.py", "--mode", "double", "--new-only",
                 "--state-file", "output/state/options.json",
-                "--snapshot-csv", "output/options_latest.csv",
+                "--snapshot-csv", "output/options_candidates_latest.csv",
+                "--filtered-csv", "output/options_latest.csv",
                 "--csv", "output/options_alerts.csv",
             ],
             project_dir, log_dir / "options.log", timeout,

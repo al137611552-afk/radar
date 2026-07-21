@@ -101,12 +101,16 @@ class OptionCliTests(unittest.TestCase):
     def test_parse_args_supports_incremental_state_options(self):
         args = option_cli.parse_args([
             "--new-only", "--state-file", "output/state/custom.json",
-            "--snapshot-csv", "output/options_latest.csv",
+            "--snapshot-csv", "output/options_candidates_latest.csv",
+            "--filtered-csv", "output/options_latest.csv",
         ])
 
         self.assertTrue(args.new_only)
         self.assertEqual(args.state_file, Path("output/state/custom.json"))
-        self.assertEqual(args.snapshot_csv, Path("output/options_latest.csv"))
+        self.assertEqual(
+            args.snapshot_csv, Path("output/options_candidates_latest.csv")
+        )
+        self.assertEqual(args.filtered_csv, Path("output/options_latest.csv"))
 
     def test_main_new_only_suppresses_repeated_cli_output(self):
         source = pd.DataFrame([{
@@ -124,13 +128,32 @@ class OptionCliTests(unittest.TestCase):
             "underlying_macd_cross_bars_ago": None,
             "double_confirmed": True, "ma_direction_confirmed": True,
             "macd_direction_confirmed": False, "confirmation_score": 4,
+            "signal_score": 3,
+        }, {
+            "code": "B", "dte": 5, "option_type": "PUT", "strike": 100,
+            "moneyness": 0.01, "last_price": 2,
+            "bar_time": pd.Timestamp("2026-07-14 15:00"),
+            "recent_volume": 100, "open_interest": 200,
+            "ma_bullish": False, "ma_cross_bars_ago": None,
+            "ma_cross_time": None,
+            "macd_bullish": False, "macd_cross_bars_ago": None,
+            "macd_cross_time": None,
+            "underlying_ma_bullish": True,
+            "underlying_ma_cross_bars_ago": None,
+            "underlying_macd_bullish": True,
+            "underlying_macd_cross_bars_ago": None,
+            "double_confirmed": False, "ma_direction_confirmed": False,
+            "macd_direction_confirmed": False, "confirmation_score": 0,
+            "signal_score": 0,
         }])
         with tempfile.TemporaryDirectory() as directory:
             state_path = Path(directory) / "state.json"
-            snapshot_path = Path(directory) / "options_latest.csv"
+            snapshot_path = Path(directory) / "options_candidates_latest.csv"
+            filtered_path = Path(directory) / "options_latest.csv"
             argv = [
                 "--new-only", "--state-file", str(state_path),
                 "--snapshot-csv", str(snapshot_path),
+                "--filtered-csv", str(filtered_path),
             ]
             first_output, second_output = StringIO(), StringIO()
             with patch.object(option_cli, "QuoteClient", return_value=object()), \
@@ -144,7 +167,10 @@ class OptionCliTests(unittest.TestCase):
             self.assertIn("首次命中", first_output.getvalue())
             self.assertIn("没有新增或变化", second_output.getvalue())
             snapshot = pd.read_csv(snapshot_path)
-            self.assertEqual(snapshot["code"].tolist(), ["A"])
+            filtered = pd.read_csv(filtered_path)
+            self.assertEqual(snapshot["code"].tolist(), ["A", "B"])
+            self.assertEqual(filtered["code"].tolist(), ["A"])
+            self.assertNotIn(0, filtered["confirmation_score"].tolist())
 
 
 if __name__ == "__main__":

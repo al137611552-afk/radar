@@ -1,10 +1,12 @@
 import io
+import os
 import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,6 +19,31 @@ SH = ZoneInfo("Asia/Shanghai")
 
 
 class SchedulerCliTests(unittest.TestCase):
+    def test_webhook_environment_enables_alert_delivery_handler_without_secret_args(self):
+        environment = {
+            "WATCHMAN_ALERT_WEBHOOK_URL": "https://example.invalid/watchman",
+            "WATCHMAN_ALERT_WEBHOOK_TOKEN": "local-test-token",
+        }
+        with patch.dict(os.environ, environment, clear=True):
+            handlers = scheduler_cli.build_handlers(Path("/project"), Path("/logs"))
+
+        command = handlers["alerts"].command
+        self.assertIn("alert_dispatch_cli.py", command)
+        self.assertNotIn(environment["WATCHMAN_ALERT_WEBHOOK_URL"], command)
+        self.assertNotIn(environment["WATCHMAN_ALERT_WEBHOOK_TOKEN"], command)
+
+    def test_alert_delivery_runs_each_minute_even_outside_market_session(self):
+        calls = []
+        with tempfile.TemporaryDirectory() as directory:
+            code = scheduler_cli.main(
+                ["--db", str(Path(directory) / "runs.db"), "run", "--once"],
+                now=datetime(2026, 7, 19, 3, 7, 42, tzinfo=SH),
+                handlers={"alerts": lambda slot: calls.append(slot)},
+            )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(calls, ["2026-07-19T03:07:00+08:00"])
+
     def test_handlers_publish_all_dashboard_snapshot_paths(self):
         handlers = scheduler_cli.build_handlers(Path("/project"), Path("/logs"))
 

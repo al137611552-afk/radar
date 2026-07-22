@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import sqlite3
 import threading
+import uuid
+from datetime import timedelta, timezone
 from numbers import Integral, Real
 from pathlib import Path
 
@@ -113,31 +116,68 @@ def _connect(path):
     target.parent.mkdir(parents=True, exist_ok=True)
     with _INITIALIZATION_LOCK:
         connection = sqlite3.connect(target)
-        connection.execute("PRAGMA busy_timeout=5000")
-        connection.execute("PRAGMA journal_mode=WAL")
-        connection.execute("""
-            CREATE TABLE IF NOT EXISTS alert_events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                source TEXT NOT NULL,
-                logical_slot TEXT NOT NULL,
-                entity_code TEXT NOT NULL,
-                alert_type TEXT NOT NULL,
-                severity TEXT NOT NULL CHECK(severity IN ('info', 'warning', 'critical')),
-                title TEXT NOT NULL,
-                message TEXT NOT NULL,
-                payload_json TEXT NOT NULL,
-                delivery_status TEXT NOT NULL DEFAULT 'pending'
-                    CHECK(delivery_status IN ('pending', 'delivered', 'failed')),
-                attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0),
-                last_error TEXT,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(source, logical_slot, entity_code, alert_type)
+        try:
+            connection.execute("PRAGMA busy_timeout=5000")
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS alert_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source TEXT NOT NULL,
+                    logical_slot TEXT NOT NULL,
+                    entity_code TEXT NOT NULL,
+                    alert_type TEXT NOT NULL,
+                    severity TEXT NOT NULL
+                        CHECK(severity IN ('info', 'warning', 'critical')),
+                    title TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    delivery_status TEXT NOT NULL DEFAULT 'pending'
+                        CHECK(delivery_status IN ('pending', 'delivered', 'failed')),
+                    attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0),
+                    last_error TEXT,
+                    next_attempt_at TEXT,
+                    lease_token TEXT,
+                    lease_until TEXT,
+                    delivered_at TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(source, logical_slot, entity_code, alert_type)
+                )
+            """)
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_alert_events_recent "
+                "ON alert_events(id DESC)"
             )
-        """)
-        connection.execute(
-            "CREATE INDEX IF NOT EXISTS idx_alert_events_recent "
-            "ON alert_events(id DESC)"
-        )
+            columns = {
+                row[1]
+                for row in connection.execute("PRAGMA table_info(alert_events)")
+            }
+            migrations = {
+                "next_attempt_at": (
+                    "ALTER TABLE alert_events ADD COLUMN next_attempt_at TEXT"
+                ),
+                "lease_token": (
+                    "ALTER TABLE alert_events ADD COLUMN lease_token TEXT"
+                ),
+                "lease_until": (
+                    "ALTER TABLE alert_events ADD COLUMN lease_until TEXT"
+                ),
+                "delivered_at": (
+                    "ALTER TABLE alert_events ADD COLUMN delivered_at TEXT"
+                ),
+            }
+            for name, statement in migrations.items():
+                if name not in columns:
+                    connection.execute(statement)
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_alert_events_delivery "
+                "ON alert_events(delivery_status, next_attempt_at, lease_until, id)"
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            connection.close()
+            raise
     return connection
 
 
@@ -179,6 +219,143 @@ def enqueue_option_alerts(path, alerts: pd.DataFrame, logical_slot) -> int:
             records,
         )
         return connection.total_changes - before
+
+
+def _utc_timestamp(value, name) -> str:
+    try:
+        parsed = pd.Timestamp(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"invalid {name}") from exc
+    if pd.isna(parsed):
+        raise ValueError(f"invalid {name}")
+    if parsed.tzinfo is None:
+        parsed = parsed.tz_localize(timezone.utc)
+    else:
+        parsed = parsed.tz_convert(timezone.utc)
+    return parsed.isoformat(timespec="seconds")
+
+
+def _positive_integer(value, name) -> int:
+    if isinstance(value, bool) or not isinstance(value, Integral) or value < 1:
+        raise ValueError(f"{name} must be a positive integer")
+    return int(value)
+
+
+def claim_alerts(path, now, limit=20, lease_seconds=60) -> list[dict]:
+    """Atomically lease due pending alerts and increment their attempt count."""
+    batch_size = _positive_integer(limit, "limit")
+    lease_duration = _positive_integer(lease_seconds, "lease_seconds")
+    claimed_at = _utc_timestamp(now, "now")
+    lease_until = _utc_timestamp(
+        pd.Timestamp(now) + timedelta(seconds=lease_duration), "lease_until"
+    )
+    lease_token = uuid.uuid4().hex
+    with _connect(path) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        ids = [
+            row[0]
+            for row in connection.execute(
+                """SELECT id FROM alert_events
+                   WHERE delivery_status = 'pending'
+                     AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+                     AND (lease_until IS NULL OR lease_until <= ?)
+                   ORDER BY id LIMIT ?""",
+                (claimed_at, claimed_at, batch_size),
+            )
+        ]
+        connection.executemany(
+            """UPDATE alert_events
+               SET lease_token = ?, lease_until = ?, attempts = attempts + 1
+               WHERE id = ? AND delivery_status = 'pending'
+                 AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+                 AND (lease_until IS NULL OR lease_until <= ?)""",
+            [
+                (lease_token, lease_until, event_id, claimed_at, claimed_at)
+                for event_id in ids
+            ],
+        )
+        cursor = connection.execute(
+            """SELECT id, source, logical_slot, entity_code, alert_type,
+                      severity, title, message, payload_json, delivery_status,
+                      attempts, last_error, created_at, lease_token, lease_until
+               FROM alert_events WHERE lease_token = ? ORDER BY id""",
+            (lease_token,),
+        )
+        columns = [item[0] for item in cursor.description]
+        rows = cursor.fetchall()
+        _validate_loaded_alert_rows(rows, columns)
+    records = []
+    for row in rows:
+        record = dict(zip(columns, row))
+        record["payload"] = json.loads(
+            record["payload_json"], parse_constant=_reject_json_constant
+        )
+        records.append(record)
+    return records
+
+
+def mark_alert_delivered(path, event_id, lease_token, delivered_at) -> bool:
+    """Complete delivery only when the caller still owns the active lease."""
+    identifier = _positive_integer(event_id, "event_id")
+    token = _text(lease_token, "lease_token", limit=80)
+    timestamp = _utc_timestamp(delivered_at, "delivered_at")
+    with _connect(path) as connection:
+        cursor = connection.execute(
+            """UPDATE alert_events
+               SET delivery_status = 'delivered', delivered_at = ?,
+                   lease_token = NULL, lease_until = NULL,
+                   next_attempt_at = NULL, last_error = NULL
+               WHERE id = ? AND delivery_status = 'pending' AND lease_token = ?
+                 AND lease_until > ?""",
+            (timestamp, identifier, token, timestamp),
+        )
+        return cursor.rowcount == 1
+
+
+def mark_alert_failed(
+    path, event_id, lease_token, failed_at, error_code,
+    max_attempts=5, base_delay_seconds=60,
+) -> bool:
+    """Release a failed lease with exponential backoff or dead-letter it."""
+    identifier = _positive_integer(event_id, "event_id")
+    token = _text(lease_token, "lease_token", limit=80)
+    code = _text(error_code, "error_code", limit=80)
+    if re.fullmatch(r"[A-Z][A-Z0-9_]*", code) is None:
+        raise ValueError("error_code must be an uppercase machine code")
+    maximum = _positive_integer(max_attempts, "max_attempts")
+    base_delay = _positive_integer(base_delay_seconds, "base_delay_seconds")
+    failed_timestamp = _utc_timestamp(failed_at, "failed_at")
+    with _connect(path) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute(
+            """SELECT attempts FROM alert_events
+               WHERE id = ? AND delivery_status = 'pending' AND lease_token = ?
+                 AND lease_until > ?""",
+            (identifier, token, failed_timestamp),
+        ).fetchone()
+        if row is None:
+            return False
+        attempts = int(row[0])
+        terminal = attempts >= maximum
+        next_attempt = None
+        if not terminal:
+            delay = min(base_delay * (2 ** (attempts - 1)), 86400)
+            next_attempt = _utc_timestamp(
+                pd.Timestamp(failed_timestamp) + timedelta(seconds=delay),
+                "next_attempt_at",
+            )
+        cursor = connection.execute(
+            """UPDATE alert_events
+               SET delivery_status = ?, last_error = ?, next_attempt_at = ?,
+                   lease_token = NULL, lease_until = NULL
+               WHERE id = ? AND delivery_status = 'pending' AND lease_token = ?
+                 AND lease_until > ?""",
+            (
+                "failed" if terminal else "pending", code, next_attempt,
+                identifier, token, failed_timestamp,
+            ),
+        )
+        return cursor.rowcount == 1
 
 
 def load_recent_alerts(path, limit=100) -> pd.DataFrame:

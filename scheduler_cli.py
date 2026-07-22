@@ -16,7 +16,7 @@ from zoneinfo import ZoneInfo
 from scheduler import RunStore, TaskRunner, due_slots
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
-TASKS = ("intraday", "options", "momentum")
+TASKS = ("intraday", "options", "momentum", "alerts")
 DEFAULT_DB = Path("output/scheduler/runs.db")
 DEFAULT_HISTORY_DB = Path("output/history/radar.db")
 DEFAULT_LOG_DIR = Path("output/logs")
@@ -94,7 +94,7 @@ def load_holidays(path: Path | None) -> set[str]:
 
 def build_handlers(project_dir: Path, log_dir: Path, timeout: int = 300):
     python = Path(sys.executable)
-    return {
+    handlers = {
         "intraday": CommandTask(
             [
                 python, "intraday_cli.py", "--top", "15",
@@ -126,6 +126,12 @@ def build_handlers(project_dir: Path, log_dir: Path, timeout: int = 300):
             project_dir, log_dir / "momentum.log", timeout,
         ),
     }
+    if os.environ.get("WATCHMAN_ALERT_WEBHOOK_URL"):
+        handlers["alerts"] = CommandTask(
+            [python, "alert_dispatch_cli.py"],
+            project_dir, log_dir / "alerts.log", timeout,
+        )
+    return handlers
 
 
 def snapshot_stats(path: Path) -> dict[str, int | str | None]:
@@ -280,7 +286,17 @@ def main(argv=None, now: datetime | None = None, handlers=None):
         pending_results = runner.run_due(
             store.retryable_slots(max_attempts=max_attempts)
         )
-        current_results = runner.run_due(due_slots(current, holidays=holidays))
+        current_slots = due_slots(current, holidays=holidays)
+        if "alerts" in task_handlers:
+            local_current = (
+                current.replace(tzinfo=SHANGHAI)
+                if current.tzinfo is None
+                else current.astimezone(SHANGHAI)
+            )
+            current_slots["alerts"] = local_current.replace(
+                second=0, microsecond=0
+            ).isoformat(timespec="seconds")
+        current_results = runner.run_due(current_slots)
         if pending_results:
             print("重试任务：")
             _print_results(pending_results)

@@ -43,6 +43,9 @@ _DASHBOARD_ALERT_FIELDS = (
     "message",
     "delivery_status",
     "attempts",
+    "total_attempts",
+    "requeue_count",
+    "last_requeued_at",
     "created_at",
 )
 

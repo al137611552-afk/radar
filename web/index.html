@@ -6,8 +6,8 @@
   <meta name="color-scheme" content="dark">
   <link rel="icon" href="data:,">
   <title>Watchman · 期货监控台</title>
-  <link rel="stylesheet" href="/assets/dashboard.css?v=20260721-11">
-  <script src="/assets/dashboard.js?v=20260721-11" defer></script>
+  <link rel="stylesheet" href="/assets/dashboard.css?v=20260722-12">
+  <script src="/assets/dashboard.js?v=20260722-12" defer></script>
 </head>
 <body>
   <div class="app-shell">
@@ -136,9 +136,9 @@
       </section>
 
       <section class="panel" data-panel="alerts">
-        <div class="section-intro"><div><p class="eyebrow">DURABLE ALERT OUTBOX</p><h2>预警中心</h2><p>按调度逻辑时点幂等记录期权信号变化，展示待投递、已投递和失败状态。</p></div><span id="alerts-meta" class="count-badge">0 告警</span></div>
+        <div class="section-intro"><div><p class="eyebrow">DURABLE ALERT OUTBOX</p><h2>预警中心</h2><p>按调度逻辑时点幂等记录期权信号变化，并只读展示投递、死信重放及累计尝试审计状态。</p></div><span id="alerts-meta" class="count-badge">0 告警</span></div>
         <div id="alert-summary" class="alert-summary" aria-live="polite"></div>
-        <article class="table-card"><div class="table-scroll"><table><thead><tr><th>逻辑时点</th><th>级别</th><th>来源</th><th>事件</th><th>对象</th><th>说明</th><th>投递状态</th><th>尝试</th></tr></thead><tbody id="alerts-table"></tbody></table></div></article>
+        <article class="table-card"><div class="table-scroll"><table><thead><tr><th>逻辑时点</th><th>级别</th><th>来源</th><th>事件</th><th>对象</th><th>说明</th><th>投递状态</th><th>本轮尝试</th><th>累计尝试</th><th>重放次数</th><th>最近重放</th></tr></thead><tbody id="alerts-table"></tbody></table></div></article>
       </section>
 
       <section class="panel" data-panel="tasks">

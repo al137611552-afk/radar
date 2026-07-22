@@ -539,6 +539,9 @@ function renderAlerts() {
     const status = delivery[item.delivery_status] || [value(item.delivery_status), "flat"];
     const deliveryCell = node("td"); deliveryCell.append(badge(status[0], status[1])); row.append(deliveryCell);
     addCell(row, integer(item.attempts), "number");
+    addCell(row, integer(item.total_attempts), "number");
+    addCell(row, integer(item.requeue_count), "number");
+    addCell(row, value(item.last_requeued_at), "number muted");
     return row;
   }));
 }

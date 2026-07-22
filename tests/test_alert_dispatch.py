@@ -4,7 +4,7 @@ import sys
 import tempfile
 import threading
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
@@ -130,6 +130,31 @@ class AlertDispatchTests(unittest.TestCase):
                 path, self.url,
                 now=datetime(2026, 7, 22, 2, 0, 30, tzinfo=timezone.utc),
                 base_delay_seconds=30,
+            )
+
+            first, second = _WebhookHandler.requests
+            self.assertEqual(
+                first["headers"]["Idempotency-Key"],
+                second["headers"]["Idempotency-Key"],
+            )
+            self.assertEqual(first["body"], second["body"])
+
+    def test_dead_letter_replay_reuses_idempotency_key_and_request_body(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "alerts.db"
+            self._enqueue(path)
+            now = datetime(2026, 7, 22, 2, 0, tzinfo=timezone.utc)
+            _WebhookHandler.status = 503
+            alert_dispatch.dispatch_once(
+                path, self.url, now=now, max_attempts=1,
+            )
+            event_id = int(alert_store.load_recent_alerts(path).iloc[0]["id"])
+            alert_store.requeue_failed_alerts(
+                path, now=now + timedelta(seconds=1), event_ids=[event_id]
+            )
+            _WebhookHandler.status = 204
+            alert_dispatch.dispatch_once(
+                path, self.url, now=now + timedelta(seconds=2),
             )
 
             first, second = _WebhookHandler.requests

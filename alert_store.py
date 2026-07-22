@@ -15,6 +15,7 @@ from pathlib import Path
 import pandas as pd
 
 _INITIALIZATION_LOCK = threading.Lock()
+_SQLITE_MAX_INTEGER = 2**63 - 1
 _REQUIRED_OPTION_COLUMNS = ("code", "alert_type")
 _OPTION_PAYLOAD_COLUMNS = (
     "name", "underlying", "option_type", "dte", "confirmation_score"
@@ -100,7 +101,11 @@ def _validate_loaded_alert_rows(rows, columns) -> None:
             record["last_error"], str
         ):
             raise ValueError("invalid alert last_error type")
-        for column in ("id", "attempts"):
+        if record.get("last_requeued_at") is not None and not isinstance(
+            record["last_requeued_at"], str
+        ):
+            raise ValueError("invalid alert last_requeued_at type")
+        for column in ("id", "attempts", "total_attempts", "requeue_count"):
             value = record.get(column)
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise ValueError(f"invalid alert {column}")
@@ -111,11 +116,18 @@ def _validate_loaded_alert_rows(rows, columns) -> None:
             raise ValueError("alert payload_json must contain an object")
 
 
-def _connect(path):
+def _connect(path, *, create=True):
     target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
+    if create:
+        target.parent.mkdir(parents=True, exist_ok=True)
+    elif not target.is_file():
+        raise FileNotFoundError(target)
     with _INITIALIZATION_LOCK:
-        connection = sqlite3.connect(target)
+        if create:
+            connection = sqlite3.connect(target)
+        else:
+            uri = f"{target.resolve().as_uri()}?mode=rw"
+            connection = sqlite3.connect(uri, uri=True)
         try:
             connection.execute("PRAGMA busy_timeout=5000")
             connection.execute("PRAGMA journal_mode=WAL")
@@ -135,11 +147,16 @@ def _connect(path):
                     delivery_status TEXT NOT NULL DEFAULT 'pending'
                         CHECK(delivery_status IN ('pending', 'delivered', 'failed')),
                     attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0),
+                    total_attempts INTEGER NOT NULL DEFAULT 0
+                        CHECK(total_attempts >= 0),
                     last_error TEXT,
                     next_attempt_at TEXT,
                     lease_token TEXT,
                     lease_until TEXT,
                     delivered_at TEXT,
+                    requeue_count INTEGER NOT NULL DEFAULT 0
+                        CHECK(requeue_count >= 0),
+                    last_requeued_at TEXT,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(source, logical_slot, entity_code, alert_type)
                 )
@@ -153,6 +170,10 @@ def _connect(path):
                 for row in connection.execute("PRAGMA table_info(alert_events)")
             }
             migrations = {
+                "total_attempts": (
+                    "ALTER TABLE alert_events ADD COLUMN total_attempts "
+                    "INTEGER NOT NULL DEFAULT 0 CHECK(total_attempts >= 0)"
+                ),
                 "next_attempt_at": (
                     "ALTER TABLE alert_events ADD COLUMN next_attempt_at TEXT"
                 ),
@@ -165,10 +186,21 @@ def _connect(path):
                 "delivered_at": (
                     "ALTER TABLE alert_events ADD COLUMN delivered_at TEXT"
                 ),
+                "requeue_count": (
+                    "ALTER TABLE alert_events ADD COLUMN requeue_count "
+                    "INTEGER NOT NULL DEFAULT 0 CHECK(requeue_count >= 0)"
+                ),
+                "last_requeued_at": (
+                    "ALTER TABLE alert_events ADD COLUMN last_requeued_at TEXT"
+                ),
             }
             for name, statement in migrations.items():
                 if name not in columns:
                     connection.execute(statement)
+            if "total_attempts" not in columns:
+                connection.execute(
+                    "UPDATE alert_events SET total_attempts = attempts"
+                )
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_alert_events_delivery "
                 "ON alert_events(delivery_status, next_attempt_at, lease_until, id)"
@@ -238,7 +270,10 @@ def _utc_timestamp(value, name) -> str:
 def _positive_integer(value, name) -> int:
     if isinstance(value, bool) or not isinstance(value, Integral) or value < 1:
         raise ValueError(f"{name} must be a positive integer")
-    return int(value)
+    result = int(value)
+    if result > _SQLITE_MAX_INTEGER:
+        raise ValueError(f"{name} exceeds SQLite integer range")
+    return result
 
 
 def claim_alerts(path, now, limit=20, lease_seconds=60) -> list[dict]:
@@ -265,7 +300,8 @@ def claim_alerts(path, now, limit=20, lease_seconds=60) -> list[dict]:
         ]
         connection.executemany(
             """UPDATE alert_events
-               SET lease_token = ?, lease_until = ?, attempts = attempts + 1
+               SET lease_token = ?, lease_until = ?, attempts = attempts + 1,
+                   total_attempts = total_attempts + 1
                WHERE id = ? AND delivery_status = 'pending'
                  AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
                  AND (lease_until IS NULL OR lease_until <= ?)""",
@@ -277,7 +313,9 @@ def claim_alerts(path, now, limit=20, lease_seconds=60) -> list[dict]:
         cursor = connection.execute(
             """SELECT id, source, logical_slot, entity_code, alert_type,
                       severity, title, message, payload_json, delivery_status,
-                      attempts, last_error, created_at, lease_token, lease_until
+                      attempts, total_attempts, requeue_count,
+                      last_requeued_at, last_error, created_at,
+                      lease_token, lease_until
                FROM alert_events WHERE lease_token = ? ORDER BY id""",
             (lease_token,),
         )
@@ -358,6 +396,60 @@ def mark_alert_failed(
         return cursor.rowcount == 1
 
 
+def requeue_failed_alerts(path, now, event_ids=None, limit=100) -> list[int]:
+    """Atomically reset a bounded set of dead letters for a fresh delivery cycle."""
+    batch_size = _positive_integer(limit, "limit")
+    requeued_at = _utc_timestamp(now, "now")
+    identifiers = None
+    if event_ids is not None:
+        if isinstance(event_ids, (str, bytes)):
+            raise ValueError("event_ids must be a sequence of positive integers")
+        identifiers = []
+        seen = set()
+        for value in event_ids:
+            identifier = _positive_integer(value, "event_id")
+            if identifier not in seen:
+                identifiers.append(identifier)
+                seen.add(identifier)
+        if not identifiers:
+            raise ValueError("event_ids must not be empty")
+        if len(identifiers) > batch_size:
+            raise ValueError("event_ids exceeds limit")
+
+    with _connect(path, create=False) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        if identifiers is None:
+            selected = [
+                row[0]
+                for row in connection.execute(
+                    """SELECT id FROM alert_events
+                       WHERE delivery_status = 'failed'
+                       ORDER BY id LIMIT ?""",
+                    (batch_size,),
+                )
+            ]
+        else:
+            selected = []
+            for identifier in identifiers:
+                row = connection.execute(
+                    """SELECT id FROM alert_events
+                       WHERE id = ? AND delivery_status = 'failed'""",
+                    (identifier,),
+                ).fetchone()
+                if row is not None:
+                    selected.append(row[0])
+        connection.executemany(
+            """UPDATE alert_events
+               SET delivery_status = 'pending', attempts = 0, last_error = NULL,
+                   next_attempt_at = NULL, lease_token = NULL, lease_until = NULL,
+                   delivered_at = NULL, requeue_count = requeue_count + 1,
+                   last_requeued_at = ?
+               WHERE id = ? AND delivery_status = 'failed'""",
+            [(requeued_at, identifier) for identifier in selected],
+        )
+        return selected
+
+
 def load_recent_alerts(path, limit=100) -> pd.DataFrame:
     """Read a bounded newest-first alert view without creating a database."""
     rows, _ = load_alert_dashboard(path, limit=limit)
@@ -382,13 +474,34 @@ def load_alert_dashboard(path, limit=100) -> tuple[pd.DataFrame, dict[str, int]]
                 raise ValueError("invalid alert status aggregate")
             counts[status] = amount
             counts["total"] += amount
-        cursor = connection.execute(
-            """SELECT id, source, logical_slot, entity_code, alert_type,
-                      severity, title, message, payload_json, delivery_status,
-                      attempts, last_error, created_at
-               FROM alert_events ORDER BY id DESC LIMIT ?""",
-            (int(limit),),
-        )
+        replay_columns = {
+            "total_attempts", "requeue_count", "last_requeued_at"
+        }
+        available_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(alert_events)")
+        }
+        present_replay_columns = replay_columns & available_columns
+        if present_replay_columns == replay_columns:
+            cursor = connection.execute(
+                """SELECT id, source, logical_slot, entity_code, alert_type,
+                          severity, title, message, payload_json, delivery_status,
+                          attempts, total_attempts, requeue_count,
+                          last_requeued_at, last_error, created_at
+                   FROM alert_events ORDER BY id DESC LIMIT ?""",
+                (int(limit),),
+            )
+        elif not present_replay_columns:
+            cursor = connection.execute(
+                """SELECT id, source, logical_slot, entity_code, alert_type,
+                          severity, title, message, payload_json, delivery_status,
+                          attempts, attempts AS total_attempts,
+                          0 AS requeue_count, NULL AS last_requeued_at,
+                          last_error, created_at
+                   FROM alert_events ORDER BY id DESC LIMIT ?""",
+                (int(limit),),
+            )
+        else:
+            raise ValueError("incomplete alert replay schema")
         columns = [item[0] for item in cursor.description]
         rows = cursor.fetchall()
         _validate_loaded_alert_rows(rows, columns)

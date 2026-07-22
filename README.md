@@ -264,6 +264,22 @@ export WATCHMAN_ALERT_WEBHOOK_TOKEN='你的Bearer令牌'  # 可选
 
 可通过 `--batch-size`、`--lease-seconds`、`--timeout`、`--max-attempts` 和 `--base-delay-seconds` 调整；lease必须长于HTTP超时。持续调度器检测到 `WATCHMAN_ALERT_WEBHOOK_URL` 后，会自动增加每分钟一次的 `alerts` 任务，并继承同一环境文件中的可选token。
 
+#### dead-letter安全重放
+
+修复接收端或网络故障后，可由操作员将终态 `failed` 告警重新放回待投递队列。重放只修改已经失败的行，不会触碰待投递或已投递事件；必须显式选择ID或有界批次，并提供 `--confirm`：
+
+```bash
+# 精确重放一个或多个告警
+.venv/bin/python alert_requeue_cli.py \
+  --id 17 --id 23 --limit 10 --confirm
+
+# 按ID从小到大重放最多100条失败告警
+.venv/bin/python alert_requeue_cli.py \
+  --all --limit 100 --confirm
+```
+
+重放会开启新的投递尝试周期，因此“本轮尝试”归零；`total_attempts`、`requeue_count` 和 `last_requeued_at` 持久保留累计尝试、重放次数与最近重放时点。命令只输出所选方式、实际重放数量和事件ID，不读取或输出Webhook URL、Bearer令牌及内部错误详情。数据库不存在、参数不合法或事务失败时命令非零退出；没有匹配到失败行则是成功的安全空操作。Dashboard预警中心只读展示这些审计字段，不提供远程写操作。
+
 单次检查（适合冒烟验证或外部cron）：
 
 ```bash

@@ -50,6 +50,17 @@ class AlertStoreTests(unittest.TestCase):
                            'failed', 3, 'HTTP_503', '2026-07-21T06:00:00+00:00'
                        )"""
                 )
+                connection.execute(
+                    """INSERT INTO alert_events (
+                           source, logical_slot, entity_code, alert_type, severity,
+                           title, message, payload_json, delivery_status, attempts,
+                           last_error, created_at
+                       ) VALUES (
+                           'option', '2026-07-21T14:00:00+08:00', 'auC2',
+                           '首次命中', 'info', 'title', 'message', '{}',
+                           'delivered', 1, NULL, '2026-07-21T06:01:00+00:00'
+                       )"""
+                )
 
             self.assertEqual(alert_store.claim_alerts(
                 path, now=datetime(2026, 7, 22, tzinfo=timezone.utc)
@@ -63,11 +74,21 @@ class AlertStoreTests(unittest.TestCase):
                 total_attempts = connection.execute(
                     "SELECT total_attempts FROM alert_events WHERE id = 1"
                 ).fetchone()[0]
+                delivered_at = connection.execute(
+                    "SELECT delivered_at FROM alert_events WHERE entity_code = 'auC2'"
+                ).fetchone()[0]
             self.assertTrue({
                 "next_attempt_at", "lease_token", "lease_until", "delivered_at",
                 "total_attempts", "requeue_count", "last_requeued_at",
             }.issubset(columns))
             self.assertEqual(total_attempts, 3)
+            self.assertEqual(delivered_at, "2026-07-21T06:01:00+00:00")
+            self.assertEqual(
+                alert_store.load_alert_delivery_health(
+                    path, now=datetime(2026, 7, 22, tzinfo=timezone.utc)
+                )["delivered"],
+                1,
+            )
 
     def test_concurrent_workers_claim_one_event_only_once(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -439,6 +460,350 @@ class AlertStoreTests(unittest.TestCase):
                 ValueError, "incomplete alert replay schema"
             ):
                 alert_store.load_alert_dashboard(path)
+
+    def test_delivery_health_classifies_retry_and_lease_states(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "alerts.db"
+            alerts = pd.DataFrame([
+                {"code": f"C{index}", "alert_type": "首次命中"}
+                for index in range(1, 7)
+            ])
+            alert_store.enqueue_option_alerts(
+                path, alerts, "2026-07-21T14:00:00+08:00"
+            )
+            with sqlite3.connect(path) as connection:
+                connection.execute(
+                    """UPDATE alert_events SET created_at = ? WHERE id = 1""",
+                    ("2026-07-22T01:50:00+00:00",),
+                )
+                connection.execute(
+                    """UPDATE alert_events
+                       SET created_at = ?, next_attempt_at = ? WHERE id = 2""",
+                    (
+                        "2026-07-22T01:55:00+00:00",
+                        "2026-07-22T02:20:00+00:00",
+                    ),
+                )
+                connection.execute(
+                    """UPDATE alert_events
+                       SET created_at = ?, lease_token = ?, lease_until = ?
+                       WHERE id = 3""",
+                    (
+                        "2026-07-22T02:00:00+00:00", "active-token",
+                        "2026-07-22T02:11:00+00:00",
+                    ),
+                )
+                connection.execute(
+                    """UPDATE alert_events
+                       SET created_at = ?, lease_token = ?, lease_until = ?
+                       WHERE id = 4""",
+                    (
+                        "2026-07-22T01:40:00+00:00", "stale-token",
+                        "2026-07-22T02:09:00+00:00",
+                    ),
+                )
+                connection.execute(
+                    """UPDATE alert_events
+                       SET delivery_status = 'failed', created_at = ? WHERE id = 5""",
+                    ("2026-07-22T01:30:00+00:00",),
+                )
+                connection.execute(
+                    """UPDATE alert_events
+                       SET delivery_status = 'delivered', created_at = ?,
+                           delivered_at = ? WHERE id = 6""",
+                    (
+                        "2026-07-22T01:45:00+00:00",
+                        "2026-07-22T02:05:00+00:00",
+                    ),
+                )
+
+            health = alert_store.load_alert_delivery_health(
+                path, now=datetime(2026, 7, 22, 2, 10, tzinfo=timezone.utc)
+            )
+
+            self.assertEqual(health, {
+                "total": 6,
+                "ready": 1,
+                "retry_waiting": 1,
+                "active_leases": 1,
+                "stale_leases": 1,
+                "failed": 1,
+                "delivered": 1,
+                "oldest_undelivered_at": "2026-07-22T01:30:00+00:00",
+                "oldest_undelivered_age_seconds": 2400,
+                "last_delivered_at": "2026-07-22T02:05:00+00:00",
+            })
+
+    def test_delivery_health_requires_timezone_aware_now(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "alerts.db"
+            self._enqueue_one(path)
+
+            with self.assertRaisesRegex(ValueError, "timezone-aware"):
+                alert_store.load_alert_delivery_health(
+                    path, now=datetime(2026, 7, 22, 2, 10)
+                )
+
+    def test_delivery_health_rejects_non_finite_now(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "alerts.db"
+            self._enqueue_one(path)
+            for invalid in (pd.NaT, float("inf"), float("-inf")):
+                with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                    alert_store.load_alert_delivery_health(path, now=invalid)
+
+    def test_delivery_health_rejects_delivered_alert_without_delivered_at(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "alerts.db"
+            self._enqueue_one(path)
+            with sqlite3.connect(path) as connection:
+                connection.execute(
+                    """UPDATE alert_events
+                       SET delivery_status = 'delivered', delivered_at = NULL
+                       WHERE id = 1"""
+                )
+
+            with self.assertRaisesRegex(ValueError, "delivered_at"):
+                alert_store.load_alert_delivery_health(
+                    path,
+                    now=datetime(2026, 7, 22, 2, 10, tzinfo=timezone.utc),
+                )
+
+    def test_delivery_health_rejects_pending_alert_with_delivered_at(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "alerts.db"
+            self._enqueue_one(path)
+            with sqlite3.connect(path) as connection:
+                connection.execute(
+                    """UPDATE alert_events
+                       SET delivered_at = '2026-07-22T02:00:00+00:00'
+                       WHERE id = 1"""
+                )
+
+            with self.assertRaisesRegex(ValueError, "delivered_at"):
+                alert_store.load_alert_delivery_health(
+                    path,
+                    now=datetime(2026, 7, 22, 2, 10, tzinfo=timezone.utc),
+                )
+
+    def test_delivery_health_rejects_failed_alert_with_delivered_at(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "alerts.db"
+            self._enqueue_one(path)
+            with sqlite3.connect(path) as connection:
+                connection.execute(
+                    """UPDATE alert_events
+                       SET delivery_status = 'failed',
+                           delivered_at = '2026-07-22T02:00:00+00:00'
+                       WHERE id = 1"""
+                )
+
+            with self.assertRaisesRegex(ValueError, "delivered_at"):
+                alert_store.load_alert_delivery_health(
+                    path,
+                    now=datetime(2026, 7, 22, 2, 10, tzinfo=timezone.utc),
+                )
+
+    def test_delivery_health_rejects_delivered_alert_with_next_attempt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "alerts.db"
+            self._enqueue_one(path)
+            with sqlite3.connect(path) as connection:
+                connection.execute(
+                    """UPDATE alert_events
+                       SET delivery_status = 'delivered',
+                           delivered_at = '2026-07-22T02:00:00+00:00',
+                           next_attempt_at = '2026-07-22T02:20:00+00:00'
+                       WHERE id = 1"""
+                )
+
+            with self.assertRaisesRegex(ValueError, "next_attempt_at"):
+                alert_store.load_alert_delivery_health(
+                    path,
+                    now=datetime(2026, 7, 22, 2, 10, tzinfo=timezone.utc),
+                )
+
+    def test_delivery_health_rejects_failed_alert_with_next_attempt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "alerts.db"
+            self._enqueue_one(path)
+            with sqlite3.connect(path) as connection:
+                connection.execute(
+                    """UPDATE alert_events
+                       SET delivery_status = 'failed',
+                           next_attempt_at = '2026-07-22T02:20:00+00:00'
+                       WHERE id = 1"""
+                )
+
+            with self.assertRaisesRegex(ValueError, "next_attempt_at"):
+                alert_store.load_alert_delivery_health(
+                    path,
+                    now=datetime(2026, 7, 22, 2, 10, tzinfo=timezone.utc),
+                )
+
+    def test_delivery_health_rejects_blank_lease_token(self):
+        for token in ("", "   "):
+            with self.subTest(token=token), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "alerts.db"
+                self._enqueue_one(path)
+                with sqlite3.connect(path) as connection:
+                    connection.execute(
+                        """UPDATE alert_events
+                           SET lease_token = ?,
+                               lease_until = '2026-07-22T02:20:00+00:00'
+                           WHERE id = 1""",
+                        (token,),
+                    )
+
+                with self.assertRaisesRegex(ValueError, "lease_token"):
+                    alert_store.load_alert_delivery_health(
+                        path,
+                        now=datetime(2026, 7, 22, 2, 10, tzinfo=timezone.utc),
+                    )
+
+    def test_delivery_health_rejects_mismatched_lease_fields(self):
+        invalid_pairs = (
+            ("token-without-until", None),
+            (None, "2026-07-22T02:20:00+00:00"),
+        )
+        for token, lease_until in invalid_pairs:
+            with (
+                self.subTest(token=token, lease_until=lease_until),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                path = Path(directory) / "alerts.db"
+                self._enqueue_one(path)
+                with sqlite3.connect(path) as connection:
+                    connection.execute(
+                        """UPDATE alert_events
+                           SET lease_token = ?, lease_until = ? WHERE id = 1""",
+                        (token, lease_until),
+                    )
+
+                with self.assertRaisesRegex(ValueError, "lease state"):
+                    alert_store.load_alert_delivery_health(
+                        path,
+                        now=datetime(2026, 7, 22, 2, 10, tzinfo=timezone.utc),
+                    )
+
+    def test_delivery_health_rejects_lease_on_terminal_alert(self):
+        terminal_states = (
+            ("delivered", "2026-07-22T02:00:00+00:00"),
+            ("failed", None),
+        )
+        for status, delivered_at in terminal_states:
+            with (
+                self.subTest(status=status),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                path = Path(directory) / "alerts.db"
+                self._enqueue_one(path)
+                with sqlite3.connect(path) as connection:
+                    connection.execute(
+                        """UPDATE alert_events
+                           SET delivery_status = ?, delivered_at = ?,
+                               lease_token = 'impossible',
+                               lease_until = '2026-07-22T02:20:00+00:00'
+                           WHERE id = 1""",
+                        (status, delivered_at),
+                    )
+
+                with self.assertRaisesRegex(ValueError, "terminal alert lease"):
+                    alert_store.load_alert_delivery_health(
+                        path,
+                        now=datetime(2026, 7, 22, 2, 10, tzinfo=timezone.utc),
+                    )
+
+    def test_delivery_health_supports_legacy_schema_without_mutating_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "alerts.db"
+            with sqlite3.connect(path) as connection:
+                connection.execute(
+                    """CREATE TABLE alert_events (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        source TEXT NOT NULL, logical_slot TEXT NOT NULL,
+                        entity_code TEXT NOT NULL, alert_type TEXT NOT NULL,
+                        severity TEXT NOT NULL, title TEXT NOT NULL,
+                        message TEXT NOT NULL, payload_json TEXT NOT NULL,
+                        delivery_status TEXT NOT NULL, attempts INTEGER NOT NULL,
+                        last_error TEXT, created_at TEXT NOT NULL
+                    )"""
+                )
+                connection.executemany(
+                    """INSERT INTO alert_events (
+                           source, logical_slot, entity_code, alert_type, severity,
+                           title, message, payload_json, delivery_status, attempts,
+                           created_at
+                       ) VALUES (
+                           'option', 'slot', ?, '首次命中', 'info', 'title',
+                           'message', '{}', ?, 0, ?
+                       )""",
+                    [
+                        ("C1", "pending", "2026-07-22T02:00:00+00:00"),
+                        ("C2", "delivered", "2026-07-22T02:01:00+00:00"),
+                    ],
+                )
+
+            health = alert_store.load_alert_delivery_health(
+                path, now=datetime(2026, 7, 22, 2, 10, tzinfo=timezone.utc)
+            )
+
+            self.assertEqual(health["ready"], 1)
+            self.assertEqual(health["delivered"], 1)
+            self.assertIsNone(health["last_delivered_at"])
+            with sqlite3.connect(path) as connection:
+                columns = {
+                    row[1] for row in connection.execute(
+                        "PRAGMA table_info(alert_events)"
+                    )
+                }
+            self.assertNotIn("lease_until", columns)
+
+    def test_delivery_health_missing_database_is_empty_without_creation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "missing" / "alerts.db"
+
+            health = alert_store.load_alert_delivery_health(
+                path, now=datetime(2026, 7, 22, 2, 10, tzinfo=timezone.utc)
+            )
+
+            self.assertEqual(health["total"], 0)
+            self.assertEqual(health["ready"], 0)
+            self.assertFalse(path.exists())
+            self.assertFalse(path.parent.exists())
+
+    def test_delivery_health_rejects_partial_delivery_schema(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "alerts.db"
+            with sqlite3.connect(path) as connection:
+                connection.execute(
+                    """CREATE TABLE alert_events (
+                        delivery_status TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        next_attempt_at TEXT
+                    )"""
+                )
+
+            with self.assertRaisesRegex(ValueError, "incomplete alert delivery schema"):
+                alert_store.load_alert_delivery_health(
+                    path,
+                    now=datetime(2026, 7, 22, 2, 10, tzinfo=timezone.utc),
+                )
+
+    def test_delivery_health_rejects_malformed_timestamp(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "alerts.db"
+            self._enqueue_one(path)
+            with sqlite3.connect(path) as connection:
+                connection.execute(
+                    "UPDATE alert_events SET created_at = 'not-a-timestamp' WHERE id = 1"
+                )
+
+            with self.assertRaisesRegex(ValueError, "created_at"):
+                alert_store.load_alert_delivery_health(
+                    path,
+                    now=datetime(2026, 7, 22, 2, 10, tzinfo=timezone.utc),
+                )
 
     def test_reader_reports_full_status_counts_beyond_recent_window(self):
         with tempfile.TemporaryDirectory() as directory:

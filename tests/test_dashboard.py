@@ -48,8 +48,16 @@ class DashboardDataTests(unittest.TestCase):
                 alerts,
                 "2026-07-21T14:00:00+08:00",
             )
+            with sqlite3.connect(root / "output/alerts/alerts.db") as connection:
+                connection.execute(
+                    "UPDATE alert_events SET created_at = ? WHERE id = 1",
+                    ("2026-07-21T06:00:00+00:00",),
+                )
 
-            payload = dashboard.build_dashboard_payload(root)
+            payload = dashboard.build_dashboard_payload(
+                root,
+                now=datetime(2026, 7, 21, 14, 10, tzinfo=dashboard.SHANGHAI),
+            )
 
             self.assertEqual(payload["summary"]["alert_count"], 1)
             self.assertEqual(payload["summary"]["pending_alert_count"], 1)
@@ -59,8 +67,64 @@ class DashboardDataTests(unittest.TestCase):
             self.assertEqual(payload["alerts"][0]["total_attempts"], 0)
             self.assertEqual(payload["alerts"][0]["requeue_count"], 0)
             self.assertIsNone(payload["alerts"][0]["last_requeued_at"])
+            self.assertEqual(payload["alert_health"], {
+                "total": 1,
+                "ready": 1,
+                "retry_waiting": 0,
+                "active_leases": 0,
+                "stale_leases": 0,
+                "failed": 0,
+                "delivered": 0,
+                "oldest_undelivered_at": "2026-07-21T06:00:00+00:00",
+                "oldest_undelivered_age_seconds": 600,
+                "last_delivered_at": None,
+            })
             self.assertTrue(payload["files"]["alerts"]["available"])
             json.dumps(payload, ensure_ascii=False, allow_nan=False)
+
+    def test_alert_health_uses_fixed_aggregate_whitelist(self):
+        raw = dict(dashboard._EMPTY_ALERT_HEALTH)
+        raw["internal_diagnostic"] = "secret marker"
+        with mock.patch.object(
+            dashboard, "load_alert_delivery_health", return_value=raw
+        ):
+            health, error = dashboard._read_alert_health(
+                Path("unused.db"),
+                datetime(2026, 7, 22, 12, 0, tzinfo=dashboard.SHANGHAI),
+            )
+
+        self.assertIsNone(error)
+        self.assertEqual(set(health), set(dashboard._EMPTY_ALERT_HEALTH))
+        self.assertNotIn("internal_diagnostic", health)
+
+    def test_alert_health_rejects_malformed_state_with_fixed_redacted_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "alerts.db"
+            alerts = pd.DataFrame([{
+                "code": "au2608C880", "name": "黄金购880",
+                "underlying": "au2608", "option_type": "CALL", "dte": 6,
+                "confirmation_score": 6, "alert_type": "首次命中",
+            }])
+            enqueue_option_alerts(path, alerts, "2026-07-21T14:00:00+08:00")
+            with sqlite3.connect(path) as connection:
+                connection.execute(
+                    """UPDATE alert_events
+                       SET delivery_status = 'delivered', delivered_at = NULL
+                       WHERE id = 1"""
+                )
+
+            health, error = dashboard._read_alert_health(
+                path,
+                datetime(2026, 7, 22, 12, 0, tzinfo=dashboard.SHANGHAI),
+            )
+
+            self.assertEqual(health, dashboard._EMPTY_ALERT_HEALTH)
+            self.assertEqual(error, "告警健康指标暂时无法读取")
+            serialized = json.dumps(
+                {"health": health, "error": error}, ensure_ascii=False
+            )
+            self.assertNotIn(str(path), serialized)
+            self.assertNotIn("invalid alert", serialized)
 
     def test_alert_summary_counts_full_outbox_beyond_recent_window(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -482,6 +546,12 @@ class DashboardAssetTests(unittest.TestCase):
         self.assertIn("total_attempts", script)
         self.assertIn("requeue_count", script)
         self.assertIn("last_requeued_at", script)
+        self.assertIn("alert_health", script)
+        self.assertIn("可立即投递", script)
+        self.assertIn("退避等待", script)
+        self.assertIn("活跃租约", script)
+        self.assertIn("过期租约", script)
+        self.assertIn("最老未投递", script)
         self.assertIn("累计尝试", index)
         self.assertIn("重放次数", index)
         self.assertIn("最近重放", index)
@@ -518,8 +588,8 @@ class DashboardAssetTests(unittest.TestCase):
         self.assertIn('directionalRows(rows, "short_rank")', script)
         self.assertIn('directionalRows(rows, "risk_long_rank")', script)
         self.assertIn('directionalRows(rows, "risk_short_rank")', script)
-        self.assertIn('/assets/dashboard.css?v=20260722-12', index)
-        self.assertIn('/assets/dashboard.js?v=20260722-12', index)
+        self.assertIn('/assets/dashboard.css?v=20260722-14', index)
+        self.assertIn('/assets/dashboard.js?v=20260722-14', index)
         self.assertIn('<link rel="icon" href="data:,">', index)
         self.assertIn(".table-card>.card-head{padding:", stylesheet)
         self.assertIn(".table-card+.table-card{margin-top:", stylesheet)
@@ -527,6 +597,7 @@ class DashboardAssetTests(unittest.TestCase):
         self.assertIn(".risk-badge.elevated{", stylesheet)
         self.assertIn(".risk-badge.normal{", stylesheet)
         self.assertIn(".risk-badge.unknown{", stylesheet)
+        self.assertIn(".alert-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr))", stylesheet)
         self.assertIn(
             'type === "momentum" ? directionalRows(rows, "risk_long_rank") : rows',
             script,

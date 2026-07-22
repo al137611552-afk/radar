@@ -280,6 +280,27 @@ export WATCHMAN_ALERT_WEBHOOK_TOKEN='你的Bearer令牌'  # 可选
 
 重放会开启新的投递尝试周期，因此“本轮尝试”归零；`total_attempts`、`requeue_count` 和 `last_requeued_at` 持久保留累计尝试、重放次数与最近重放时点。命令只输出所选方式、实际重放数量和事件ID，不读取或输出Webhook URL、Bearer令牌及内部错误详情。数据库不存在、参数不合法或事务失败时命令非零退出；没有匹配到失败行则是成功的安全空操作。Dashboard预警中心只读展示这些审计字段，不提供远程写操作。
 
+#### 投递健康观测
+
+可使用独立的只读命令查看可靠告警发件箱的聚合健康状态：
+
+```bash
+.venv/bin/python alert_health_cli.py
+.venv/bin/python alert_health_cli.py --db output/alerts/alerts.db
+```
+
+命令输出JSON聚合指标，不读取或输出事件正文、`payload_json`、Webhook URL、Bearer令牌、租约令牌、数据库路径或内部错误：
+
+- `ready`：当前无租约且已到投递时点的告警；
+- `retry_waiting`：仍处于指数退避等待期的告警；
+- `active_leases`：租约尚未过期、正在被worker处理的告警；
+- `stale_leases`：租约已过期、可由后续worker恢复的告警；
+- `failed` / `delivered`：终态失败和已成功投递数量；
+- `oldest_undelivered_at` / `oldest_undelivered_age_seconds`：最早未完成事件的UTC时点和积压时长；
+- `last_delivered_at`：最近一次成功投递的UTC时点。
+
+数据库不存在时返回全零空快照且不会创建文件；既有数据库schema不完整、时间字段损坏或状态组合不可能时失败关闭，CLI仅输出固定的`ALERT_HEALTH_UNAVAILABLE`错误。Dashboard预警中心使用相同的只读聚合口径，展示可立即投递、退避等待、活跃/过期租约、失败、已投递及最老积压卡片；API仍采用固定字段白名单。
+
 单次检查（适合冒烟验证或外部cron）：
 
 ```bash

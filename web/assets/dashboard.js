@@ -71,6 +71,16 @@ function age(seconds) {
   return `${Math.floor(parsed / 86400)} 天前`;
 }
 
+function duration(seconds) {
+  if (seconds === null || seconds === undefined || seconds === "") return "—";
+  const parsed = Number(seconds);
+  if (!Number.isFinite(parsed) || parsed < 0) return "—";
+  if (parsed < 60) return `${Math.floor(parsed)} 秒`;
+  if (parsed < 3600) return `${Math.floor(parsed / 60)} 分钟`;
+  if (parsed < 86400) return `${Math.floor(parsed / 3600)} 小时`;
+  return `${Math.floor(parsed / 86400)} 天`;
+}
+
 function matches(row) {
   if (!state.query) return true;
   return Object.values(row).some((item) =>
@@ -507,18 +517,24 @@ function renderAlerts() {
   const allRows = state.data.alerts || [];
   const rows = allRows.filter(matches);
   const summary = state.data.summary || {};
+  const health = state.data.alert_health || {};
   const total = Number.isFinite(Number(summary.alert_count)) ? Number(summary.alert_count) : allRows.length;
   $("#alerts-meta").textContent = state.query
     ? `${rows.length} / 最近 ${allRows.length} 告警`
     : `最近 ${allRows.length} / 共 ${total} 告警`;
   const counts = [
-    ["待投递", summary.pending_alert_count, "pending"],
-    ["已投递", summary.delivered_alert_count, "delivered"],
-    ["投递失败", summary.failed_alert_count, "failed"],
+    ["可立即投递", health.ready, "ready"],
+    ["退避等待", health.retry_waiting, "retry"],
+    ["活跃租约", health.active_leases, "active"],
+    ["过期租约", health.stale_leases, "stale"],
+    ["投递失败", health.failed ?? summary.failed_alert_count, "failed"],
+    ["已投递", health.delivered ?? summary.delivered_alert_count, "delivered"],
+    ["最老未投递", health.oldest_undelivered_age_seconds, "oldest"],
   ];
   $("#alert-summary").replaceChildren(...counts.map(([label, amount, kind]) => {
     const card = node("article", `alert-summary-card ${kind}`);
-    card.append(node("span", "", label), node("strong", "", integer(amount)));
+    const display = kind === "oldest" ? duration(amount) : integer(amount);
+    card.append(node("span", "", label), node("strong", "", display));
     return card;
   }));
   const severityKind = (severity) => severity === "critical" ? "short" : severity === "warning" ? "flat" : "long";

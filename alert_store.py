@@ -201,6 +201,12 @@ def _connect(path, *, create=True):
                 connection.execute(
                     "UPDATE alert_events SET total_attempts = attempts"
                 )
+            if "delivered_at" not in columns:
+                connection.execute(
+                    """UPDATE alert_events
+                       SET delivered_at = created_at
+                       WHERE delivery_status = 'delivered'"""
+                )
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_alert_events_delivery "
                 "ON alert_events(delivery_status, next_attempt_at, lease_until, id)"
@@ -448,6 +454,146 @@ def requeue_failed_alerts(path, now, event_ids=None, limit=100) -> list[int]:
             [(requeued_at, identifier) for identifier in selected],
         )
         return selected
+
+
+def _empty_delivery_health() -> dict:
+    return {
+        "total": 0,
+        "ready": 0,
+        "retry_waiting": 0,
+        "active_leases": 0,
+        "stale_leases": 0,
+        "failed": 0,
+        "delivered": 0,
+        "oldest_undelivered_at": None,
+        "oldest_undelivered_age_seconds": None,
+        "last_delivered_at": None,
+    }
+
+
+def _optional_utc_instant(value, name) -> pd.Timestamp | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"invalid alert {name} type")
+    try:
+        parsed = pd.Timestamp(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"invalid alert {name}") from exc
+    if pd.isna(parsed):
+        raise ValueError(f"invalid alert {name}")
+    if not isinstance(parsed, pd.Timestamp):
+        raise ValueError(f"invalid alert {name}")
+    if parsed.tzinfo is None:
+        parsed = parsed.tz_localize(timezone.utc)
+    else:
+        parsed = parsed.tz_convert(timezone.utc)
+    return parsed
+
+
+def _health_now(value) -> pd.Timestamp:
+    try:
+        parsed = pd.Timestamp(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("invalid now") from exc
+    if pd.isna(parsed) or not isinstance(parsed, pd.Timestamp):
+        raise ValueError("invalid now")
+    if parsed.tzinfo is None:
+        raise ValueError("now must be timezone-aware")
+    return parsed.tz_convert(timezone.utc)
+
+
+def load_alert_delivery_health(path, now) -> dict:
+    """Classify aggregate outbox delivery health from one read-only snapshot."""
+    current = _health_now(now)
+    health = _empty_delivery_health()
+    target = Path(path)
+    if not target.is_file():
+        return health
+    uri = f"{target.resolve().as_uri()}?mode=ro"
+    oldest_undelivered = None
+    last_delivered = None
+    with sqlite3.connect(uri, uri=True) as connection:
+        connection.execute("BEGIN")
+        delivery_columns = {
+            "next_attempt_at", "lease_token", "lease_until", "delivered_at"
+        }
+        available_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(alert_events)")
+        }
+        present_delivery_columns = delivery_columns & available_columns
+        full_delivery_schema = present_delivery_columns == delivery_columns
+        if full_delivery_schema:
+            rows = connection.execute(
+                """SELECT delivery_status, created_at, next_attempt_at,
+                          lease_token, lease_until, delivered_at
+                   FROM alert_events"""
+            )
+        elif not present_delivery_columns:
+            rows = connection.execute(
+                """SELECT delivery_status, created_at, NULL AS next_attempt_at,
+                          NULL AS lease_token, NULL AS lease_until,
+                          NULL AS delivered_at
+                   FROM alert_events"""
+            )
+        else:
+            raise ValueError("incomplete alert delivery schema")
+        for status, created_raw, next_raw, token, lease_raw, delivered_raw in rows:
+            if status not in _DELIVERY_STATUSES:
+                raise ValueError("invalid alert delivery status")
+            created = _optional_utc_instant(created_raw, "created_at")
+            if created is None:
+                raise ValueError("invalid alert created_at")
+            next_attempt = _optional_utc_instant(next_raw, "next_attempt_at")
+            lease_until = _optional_utc_instant(lease_raw, "lease_until")
+            delivered_at = _optional_utc_instant(delivered_raw, "delivered_at")
+            if (token is None) != (lease_until is None):
+                raise ValueError("invalid alert lease state")
+            if token is not None and not isinstance(token, str):
+                raise ValueError("invalid alert lease_token type")
+            if token is not None and not token.strip():
+                raise ValueError("invalid alert lease_token")
+            if status != "pending" and token is not None:
+                raise ValueError("invalid terminal alert lease")
+            if full_delivery_schema:
+                if status == "delivered" and delivered_at is None:
+                    raise ValueError("invalid alert delivered_at state")
+                if status != "delivered" and delivered_at is not None:
+                    raise ValueError("invalid alert delivered_at state")
+                if status != "pending" and next_attempt is not None:
+                    raise ValueError("invalid alert next_attempt_at state")
+
+            health["total"] += 1
+            if status == "delivered":
+                health["delivered"] += 1
+                if delivered_at is not None and (
+                    last_delivered is None or delivered_at > last_delivered
+                ):
+                    last_delivered = delivered_at
+                continue
+            if oldest_undelivered is None or created < oldest_undelivered:
+                oldest_undelivered = created
+            if status == "failed":
+                health["failed"] += 1
+                continue
+            if lease_until is not None:
+                key = "active_leases" if lease_until > current else "stale_leases"
+                health[key] += 1
+            elif next_attempt is not None and next_attempt > current:
+                health["retry_waiting"] += 1
+            else:
+                health["ready"] += 1
+
+    if oldest_undelivered is not None:
+        health["oldest_undelivered_at"] = oldest_undelivered.isoformat(
+            timespec="seconds"
+        )
+        health["oldest_undelivered_age_seconds"] = max(
+            0, int((current - oldest_undelivered).total_seconds())
+        )
+    if last_delivered is not None:
+        health["last_delivered_at"] = last_delivered.isoformat(timespec="seconds")
+    return health
 
 
 def load_recent_alerts(path, limit=100) -> pd.DataFrame:

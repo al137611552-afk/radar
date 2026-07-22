@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from alert_store import enqueue_option_alerts
 from atomic_io import atomic_to_csv
 from option_history_store import save_option_snapshot
 from option_scanner import scan_near_expiry_options
@@ -110,6 +111,31 @@ def filter_incremental_signals(result, mode, state_path):
     return alerts
 
 
+def _manual_alert_slot(*frames) -> str:
+    """Use market data time so retries remain stable across wall-clock hours."""
+    bar_times = []
+    for frame in frames:
+        if frame is None or frame.empty or "bar_time" not in frame:
+            continue
+        for value in frame["bar_time"]:
+            try:
+                parsed = pd.Timestamp(value)
+            except (TypeError, ValueError):
+                continue
+            if pd.isna(parsed):
+                continue
+            if parsed.tzinfo is None:
+                parsed = parsed.tz_localize(SHANGHAI)
+            else:
+                parsed = parsed.tz_convert(SHANGHAI)
+            bar_times.append(parsed)
+    if bar_times:
+        return max(bar_times).isoformat()
+    return datetime.now(SHANGHAI).replace(
+        minute=0, second=0, microsecond=0
+    ).isoformat(timespec="seconds")
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description="扫描1至14天到期、平值附近且流动性合格的商品期权小时金叉"
@@ -136,6 +162,11 @@ def parse_args(argv=None):
         "--state-file", type=Path,
         default=Path("output/state/options.json"),
         help="增量告警状态文件",
+    )
+    parser.add_argument(
+        "--alert-db", type=Path,
+        default=Path("output/alerts/alerts.db"),
+        help="幂等保存增量告警的SQLite发件箱",
     )
     parser.add_argument(
         "--snapshot-csv", type=Path,
@@ -189,17 +220,25 @@ def main(argv=None):
     matched_count = len(filtered)
     if args.filtered_csv:
         atomic_to_csv(filtered, args.filtered_csv, index=False, encoding="utf-8-sig")
+    alert_count = 0
     if args.new_only:
-        filtered = filter_incremental_signals(
-            filtered, args.mode, args.state_file
+        previous = load_state(args.state_file)
+        filtered, next_state = diff_signals(
+            filtered,
+            previous,
+            fingerprint_fields=SIGNAL_FINGERPRINT_FIELDS,
+            scope=f"option:{args.mode}",
         )
+        alert_slot = logical_slot or _manual_alert_slot(snapshot, filtered)
+        alert_count = enqueue_option_alerts(args.alert_db, filtered, alert_slot)
+        save_state(args.state_file, next_state)
     if args.csv:
         atomic_to_csv(filtered, args.csv, index=False, encoding="utf-8-sig")
     summary = (
         f"临期期权可分析 {len(snapshot)} 个；模式 {args.mode} 命中 {matched_count} 个"
     )
     if args.new_only:
-        summary += f"；新增或变化 {len(filtered)} 个"
+        summary += f"；新增或变化 {len(filtered)} 个；告警入箱 {alert_count} 个"
     print(summary)
     if not args.no_history:
         print(f"历史快照已保存：{args.history_db}（{history_count}条）")

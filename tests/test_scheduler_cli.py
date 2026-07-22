@@ -32,6 +32,7 @@ class SchedulerCliTests(unittest.TestCase):
             "output/options_latest.csv",
         )
         self.assertIn("output/history/options.db", option_command)
+        self.assertIn("output/alerts/alerts.db", option_command)
         self.assertIn("output/momentum_latest.csv", handlers["momentum"].command)
         self.assertIn("output/sector_momentum_latest.csv", handlers["momentum"].command)
         self.assertIn("output/history/momentum.db", handlers["momentum"].command)

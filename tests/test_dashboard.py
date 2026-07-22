@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT))
 
 import dashboard  # noqa: E402
 import dashboard_cli  # noqa: E402
+from alert_store import enqueue_option_alerts  # noqa: E402
 from momentum_history_store import save_momentum_snapshot  # noqa: E402
 from option_history_store import save_option_snapshot  # noqa: E402
 
@@ -33,6 +34,128 @@ class DashboardDataTests(unittest.TestCase):
             {"value": None}, {"value": None}, {"value": None}, {"value": 1.5}
         ])
         json.dumps(records, allow_nan=False)
+
+    def test_snapshot_exposes_recent_durable_alerts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            alerts = pd.DataFrame([{
+                "code": "au2608C880", "name": "黄金购880",
+                "underlying": "au2608", "option_type": "CALL", "dte": 6,
+                "confirmation_score": 6, "alert_type": "首次命中",
+            }])
+            enqueue_option_alerts(
+                root / "output/alerts/alerts.db",
+                alerts,
+                "2026-07-21T14:00:00+08:00",
+            )
+
+            payload = dashboard.build_dashboard_payload(root)
+
+            self.assertEqual(payload["summary"]["alert_count"], 1)
+            self.assertEqual(payload["summary"]["pending_alert_count"], 1)
+            self.assertEqual(payload["alerts"][0]["entity_code"], "au2608C880")
+            self.assertEqual(payload["alerts"][0]["severity"], "info")
+            self.assertTrue(payload["files"]["alerts"]["available"])
+            json.dumps(payload, ensure_ascii=False, allow_nan=False)
+
+    def test_alert_summary_counts_full_outbox_beyond_recent_window(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "output/alerts/alerts.db"
+            alerts = pd.DataFrame([
+                {"code": f"C{index:03d}", "alert_type": "首次命中"}
+                for index in range(103)
+            ])
+            enqueue_option_alerts(
+                path, alerts, "2026-07-21T14:00:00+08:00"
+            )
+            with sqlite3.connect(path) as connection:
+                connection.execute(
+                    "UPDATE alert_events SET delivery_status = 'delivered' WHERE id = 1"
+                )
+                connection.execute(
+                    "UPDATE alert_events SET delivery_status = 'failed' WHERE id = 2"
+                )
+
+            payload = dashboard.build_dashboard_payload(root)
+
+            self.assertEqual(len(payload["alerts"]), 100)
+            self.assertEqual(payload["summary"]["alert_count"], 103)
+            self.assertEqual(payload["summary"]["pending_alert_count"], 101)
+            self.assertEqual(payload["summary"]["delivered_alert_count"], 1)
+            self.assertEqual(payload["summary"]["failed_alert_count"], 1)
+
+    def test_dashboard_omits_internal_alert_error_details(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            alert_path = root / "output/alerts/alerts.db"
+            enqueue_option_alerts(
+                alert_path,
+                pd.DataFrame([{"code": "auC1", "alert_type": "首次命中"}]),
+                "2026-07-21T14:00:00+08:00",
+            )
+            with sqlite3.connect(alert_path) as connection:
+                connection.execute(
+                    "UPDATE alert_events SET last_error = ? WHERE id = 1",
+                    ("private diagnostic marker",),
+                )
+
+            payload = dashboard.build_dashboard_payload(root)
+            encoded = json.dumps(payload, ensure_ascii=False, allow_nan=False)
+
+            self.assertEqual(len(payload["alerts"]), 1)
+            self.assertNotIn("last_error", payload["alerts"][0])
+            self.assertNotIn("payload_json", payload["alerts"][0])
+            self.assertNotIn("private diagnostic marker", encoded)
+
+    def test_blob_in_alert_text_degrades_only_alert_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "output"
+            output.mkdir()
+            (output / "options_latest.csv").write_text(
+                "code,name,dte\nauC1,黄金购,5\n", encoding="utf-8"
+            )
+            alert_path = output / "alerts/alerts.db"
+            enqueue_option_alerts(
+                alert_path,
+                pd.DataFrame([{"code": "auC1", "alert_type": "首次命中"}]),
+                "2026-07-21T14:00:00+08:00",
+            )
+            with sqlite3.connect(alert_path) as connection:
+                connection.execute(
+                    "UPDATE alert_events SET message = ? WHERE id = 1",
+                    (sqlite3.Binary(b"\xff\xfe"),),
+                )
+
+            payload = dashboard.build_dashboard_payload(root)
+
+            self.assertEqual(payload["alerts"], [])
+            self.assertEqual(payload["summary"]["option_count"], 1)
+            self.assertEqual(payload["summary"]["health"], "degraded")
+            self.assertFalse(payload["files"]["alerts"]["available"])
+            self.assertIsNotNone(payload["files"]["alerts"]["error"])
+            json.dumps(payload, ensure_ascii=False, allow_nan=False)
+
+    def test_corrupt_alert_database_degrades_only_alert_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "output"
+            output.mkdir()
+            (output / "options_latest.csv").write_text(
+                "code,name,dte\nauC1,黄金购,5\n", encoding="utf-8"
+            )
+            alert_path = output / "alerts/alerts.db"
+            alert_path.parent.mkdir()
+            alert_path.write_bytes(b"not a sqlite database")
+
+            payload = dashboard.build_dashboard_payload(root)
+
+            self.assertEqual(payload["alerts"], [])
+            self.assertEqual(payload["summary"]["option_count"], 1)
+            self.assertEqual(payload["summary"]["health"], "degraded")
+            self.assertFalse(payload["files"]["alerts"]["available"])
+            self.assertIsNotNone(payload["files"]["alerts"]["error"])
 
     def test_snapshot_exposes_hourly_option_signal_lifecycle(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -333,7 +456,7 @@ class DashboardAssetTests(unittest.TestCase):
 
         for panel in (
             "overview", "intraday", "options", "option-history", "momentum",
-            "sectors", "history", "product", "tasks",
+            "sectors", "history", "product", "alerts", "tasks",
         ):
             self.assertIn(f'data-panel="{panel}"', index)
         self.assertIn('id="product-select"', index)
@@ -346,6 +469,12 @@ class DashboardAssetTests(unittest.TestCase):
         self.assertIn("createElementNS", script)
         self.assertIn('class="product-layout"', index)
         self.assertIn('id="option-history-table"', index)
+        self.assertIn('id="alerts-table"', index)
+        self.assertIn("function renderAlerts()", script)
+        self.assertIn("delivery_status", script)
+        self.assertIn("pending_alert_count", script)
+        self.assertIn("delivered_alert_count", script)
+        self.assertIn("failed_alert_count", script)
         self.assertIn("function renderOptionHistory()", script)
         self.assertIn("change_status", script)
         self.assertIn('id="momentum-history-table"', index)
@@ -379,8 +508,9 @@ class DashboardAssetTests(unittest.TestCase):
         self.assertIn('directionalRows(rows, "short_rank")', script)
         self.assertIn('directionalRows(rows, "risk_long_rank")', script)
         self.assertIn('directionalRows(rows, "risk_short_rank")', script)
-        self.assertIn('/assets/dashboard.css?v=20260721-10', index)
-        self.assertIn('/assets/dashboard.js?v=20260721-10', index)
+        self.assertIn('/assets/dashboard.css?v=20260721-11', index)
+        self.assertIn('/assets/dashboard.js?v=20260721-11', index)
+        self.assertIn('<link rel="icon" href="data:,">', index)
         self.assertIn(".table-card>.card-head{padding:", stylesheet)
         self.assertIn(".table-card+.table-card{margin-top:", stylesheet)
         self.assertIn(".risk-badge.high{", stylesheet)

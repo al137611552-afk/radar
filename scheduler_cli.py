@@ -112,6 +112,7 @@ def build_handlers(project_dir: Path, log_dir: Path, timeout: int = 300):
                 "--filtered-csv", "output/options_latest.csv",
                 "--csv", "output/options_alerts.csv",
                 "--history-db", "output/history/options.db",
+                "--alert-db", "output/alerts/alerts.db",
             ],
             project_dir, log_dir / "options.log", timeout,
         ),

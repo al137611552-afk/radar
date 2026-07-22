@@ -14,6 +14,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+import alert_store  # noqa: E402
 import option_cli  # noqa: E402
 
 
@@ -111,6 +112,7 @@ class OptionCliTests(unittest.TestCase):
             "--new-only", "--state-file", "output/state/custom.json",
             "--snapshot-csv", "output/options_candidates_latest.csv",
             "--filtered-csv", "output/options_latest.csv",
+            "--alert-db", "output/alerts/custom.db",
         ])
 
         self.assertTrue(args.new_only)
@@ -119,6 +121,7 @@ class OptionCliTests(unittest.TestCase):
             args.snapshot_csv, Path("output/options_candidates_latest.csv")
         )
         self.assertEqual(args.filtered_csv, Path("output/options_latest.csv"))
+        self.assertEqual(args.alert_db, Path("output/alerts/custom.db"))
 
     def test_main_new_only_suppresses_repeated_cli_output(self):
         source = pd.DataFrame([{
@@ -162,6 +165,7 @@ class OptionCliTests(unittest.TestCase):
                 "--new-only", "--no-history", "--state-file", str(state_path),
                 "--snapshot-csv", str(snapshot_path),
                 "--filtered-csv", str(filtered_path),
+                "--alert-db", str(Path(directory) / "alerts.db"),
             ]
             first_output, second_output = StringIO(), StringIO()
             with patch.object(option_cli, "QuoteClient", return_value=object()), \
@@ -179,6 +183,136 @@ class OptionCliTests(unittest.TestCase):
             self.assertEqual(snapshot["code"].tolist(), ["A", "B"])
             self.assertEqual(filtered["code"].tolist(), ["A"])
             self.assertNotIn(0, filtered["confirmation_score"].tolist())
+
+    def test_outbox_failure_does_not_advance_incremental_state(self):
+        source = pd.DataFrame([{
+            "code": "A", "name": "A购", "underlying": "a2608",
+            "option_type": "CALL", "dte": 5, "strike": 100,
+            "moneyness": 0.01, "last_price": 2, "bar_time": pd.Timestamp(
+                "2026-07-21 14:00"
+            ),
+            "recent_volume": 100, "open_interest": 200,
+            "ma_bullish": True, "ma_cross_bars_ago": 0,
+            "ma_cross_time": pd.Timestamp("2026-07-21 14:00"),
+            "macd_bullish": False, "macd_cross_bars_ago": None,
+            "macd_cross_time": None, "underlying_ma_bullish": True,
+            "underlying_ma_cross_bars_ago": None,
+            "underlying_macd_bullish": False,
+            "underlying_macd_cross_bars_ago": None,
+            "double_confirmed": True, "ma_direction_confirmed": True,
+            "macd_direction_confirmed": False, "confirmation_score": 4,
+            "signal_score": 3,
+        }])
+        with tempfile.TemporaryDirectory() as directory:
+            state_path = Path(directory) / "state.json"
+            alert_path = Path(directory) / "alerts.db"
+            argv = [
+                "--new-only", "--no-history", "--state-file", str(state_path),
+                "--alert-db", str(alert_path),
+            ]
+            environment = {"WATCHMAN_LOGICAL_SLOT": "2026-07-21T14:00:00+08:00"}
+            with patch.object(option_cli, "QuoteClient", return_value=object()), \
+                 patch.object(option_cli, "scan_near_expiry_options", return_value=source), \
+                 patch.dict(os.environ, environment, clear=True), \
+                 patch.object(option_cli, "enqueue_option_alerts", side_effect=OSError("disk full")):
+                with self.assertRaisesRegex(OSError, "disk full"):
+                    option_cli.main(argv)
+
+            self.assertFalse(state_path.exists())
+            with patch.object(option_cli, "QuoteClient", return_value=object()), \
+                 patch.object(option_cli, "scan_near_expiry_options", return_value=source), \
+                 patch.dict(os.environ, environment, clear=True), redirect_stdout(StringIO()):
+                code = option_cli.main(argv)
+
+            self.assertEqual(code, 0)
+            alerts = alert_store.load_recent_alerts(alert_path)
+            self.assertEqual(alerts["entity_code"].tolist(), ["A"])
+            self.assertEqual(alerts["logical_slot"].tolist(), [environment["WATCHMAN_LOGICAL_SLOT"]])
+
+    def test_state_failure_after_outbox_commit_is_idempotently_recoverable(self):
+        source = pd.DataFrame([{
+            "code": "A", "name": "黄金购", "underlying": "au2608",
+            "option_type": "CALL", "dte": 6, "confirmation_score": 4,
+            "ma_cross_time": pd.Timestamp("2026-07-21 13:00"),
+            "macd_cross_time": None, "double_confirmed": True,
+            "ma_direction_confirmed": True,
+            "macd_direction_confirmed": False,
+            "ma_cross_bars_ago": 0, "macd_cross_bars_ago": None,
+        }])
+        with tempfile.TemporaryDirectory() as directory:
+            state_path = Path(directory) / "state.json"
+            alert_path = Path(directory) / "alerts.db"
+            argv = [
+                "--new-only", "--no-history", "--state-file", str(state_path),
+                "--alert-db", str(alert_path),
+            ]
+            environment = {"WATCHMAN_LOGICAL_SLOT": "2026-07-21T14:00:00+08:00"}
+            with patch.object(option_cli, "QuoteClient", return_value=object()), \
+                 patch.object(option_cli, "scan_near_expiry_options", return_value=source), \
+                 patch.dict(os.environ, environment, clear=True), \
+                 patch.object(option_cli, "build_display_table", return_value=pd.DataFrame()), \
+                 patch.object(option_cli, "save_state", side_effect=OSError("disk full")):
+                with self.assertRaisesRegex(OSError, "disk full"):
+                    option_cli.main(argv)
+
+            self.assertFalse(state_path.exists())
+            self.assertEqual(len(alert_store.load_recent_alerts(alert_path)), 1)
+            with patch.object(option_cli, "QuoteClient", return_value=object()), \
+                 patch.object(option_cli, "scan_near_expiry_options", return_value=source), \
+                 patch.dict(os.environ, environment, clear=True), \
+                 patch.object(option_cli, "build_display_table", return_value=pd.DataFrame()), \
+                 redirect_stdout(StringIO()):
+                code = option_cli.main(argv)
+
+            self.assertEqual(code, 0)
+            self.assertTrue(state_path.exists())
+            self.assertEqual(len(alert_store.load_recent_alerts(alert_path)), 1)
+
+    def test_manual_state_retry_across_hour_uses_market_bar_for_outbox_identity(self):
+        source = pd.DataFrame([{
+            "code": "A", "name": "黄金购", "underlying": "au2608",
+            "option_type": "CALL", "dte": 6, "confirmation_score": 4,
+            "bar_time": pd.Timestamp("2026-07-21 13:00"),
+            "ma_cross_time": pd.Timestamp("2026-07-21 13:00"),
+            "macd_cross_time": None, "double_confirmed": True,
+            "ma_direction_confirmed": True,
+            "macd_direction_confirmed": False,
+            "ma_cross_bars_ago": 0, "macd_cross_bars_ago": None,
+        }])
+        with tempfile.TemporaryDirectory() as directory:
+            state_path = Path(directory) / "state.json"
+            alert_path = Path(directory) / "alerts.db"
+            argv = [
+                "--new-only", "--no-history", "--state-file", str(state_path),
+                "--alert-db", str(alert_path),
+            ]
+            first_now = datetime.fromisoformat("2026-07-21T14:59:00+08:00")
+            retry_now = datetime.fromisoformat("2026-07-21T15:01:00+08:00")
+            with patch.object(option_cli, "QuoteClient", return_value=object()), \
+                 patch.object(option_cli, "scan_near_expiry_options", return_value=source), \
+                 patch.dict(os.environ, {}, clear=True), \
+                 patch.object(option_cli, "datetime", create=True) as clock, \
+                 patch.object(option_cli, "build_display_table", return_value=pd.DataFrame()), \
+                 patch.object(option_cli, "save_state", side_effect=OSError("disk full")):
+                clock.now.return_value = first_now
+                with self.assertRaisesRegex(OSError, "disk full"):
+                    option_cli.main(argv)
+
+            with patch.object(option_cli, "QuoteClient", return_value=object()), \
+                 patch.object(option_cli, "scan_near_expiry_options", return_value=source), \
+                 patch.dict(os.environ, {}, clear=True), \
+                 patch.object(option_cli, "datetime", create=True) as clock, \
+                 patch.object(option_cli, "build_display_table", return_value=pd.DataFrame()), \
+                 redirect_stdout(StringIO()):
+                clock.now.return_value = retry_now
+                code = option_cli.main(argv)
+
+            alerts = alert_store.load_recent_alerts(alert_path)
+            self.assertEqual(code, 0)
+            self.assertEqual(len(alerts), 1)
+            self.assertEqual(
+                alerts["logical_slot"].tolist(), ["2026-07-21T13:00:00+08:00"]
+            )
 
     def test_main_saves_complete_candidate_snapshot_before_mode_filtering(self):
         source = pd.DataFrame([{

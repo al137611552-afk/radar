@@ -10,5 +10,6 @@ output/*.html
 output/manual_*/
 output/state/
 output/history/
+output/alerts/
 output/scheduler/
 output/logs/

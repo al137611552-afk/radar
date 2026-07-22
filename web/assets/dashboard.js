@@ -19,6 +19,7 @@ const titles = {
   sectors: "板块动量排名",
   history: "日频排名变化",
   product: "单品种研究详情",
+  alerts: "预警中心",
   tasks: "自动任务状态",
 };
 
@@ -106,6 +107,7 @@ function renderSummary() {
     ["盘中合约", summary.intraday_count, "完整5分钟横截面", "purple"],
     ["期权信号", summary.option_count, "临期双确认候选", "red"],
     ["期权变化", summary.option_history_count, "最近小时信号生命周期", "purple"],
+    ["待投递预警", summary.pending_alert_count, "SQLite可靠发件箱", summary.pending_alert_count ? "red" : "green"],
     ["动量品种", summary.momentum_count, "多周期商品指数", "green"],
     ["动量板块", summary.sector_count, "等权板块强弱", "purple"],
     ["排名历史", summary.momentum_history_count, "最近交易日变化", "green"],
@@ -172,7 +174,7 @@ function overviewSignals(targetSelector, rows, type) {
 }
 
 function renderFreshness() {
-  const labels = { intraday: "盘中雷达", options: "期权信号", momentum: "动量排名", sectors: "板块动量" };
+  const labels = { intraday: "盘中雷达", options: "期权信号", momentum: "动量排名", sectors: "板块动量", alerts: "预警发件箱" };
   $("#freshness-grid").replaceChildren(...Object.entries(state.data.files).map(([key, file]) => {
     const item = node("div", "fresh-item");
     const status = !file.exists ? "尚无文件" : !file.available ? "读取失败" : age(file.age_seconds);
@@ -501,6 +503,46 @@ function populateProductSelect() {
   select.value = selected;
 }
 
+function renderAlerts() {
+  const allRows = state.data.alerts || [];
+  const rows = allRows.filter(matches);
+  const summary = state.data.summary || {};
+  const total = Number.isFinite(Number(summary.alert_count)) ? Number(summary.alert_count) : allRows.length;
+  $("#alerts-meta").textContent = state.query
+    ? `${rows.length} / 最近 ${allRows.length} 告警`
+    : `最近 ${allRows.length} / 共 ${total} 告警`;
+  const counts = [
+    ["待投递", summary.pending_alert_count, "pending"],
+    ["已投递", summary.delivered_alert_count, "delivered"],
+    ["投递失败", summary.failed_alert_count, "failed"],
+  ];
+  $("#alert-summary").replaceChildren(...counts.map(([label, amount, kind]) => {
+    const card = node("article", `alert-summary-card ${kind}`);
+    card.append(node("span", "", label), node("strong", "", integer(amount)));
+    return card;
+  }));
+  const severityKind = (severity) => severity === "critical" ? "short" : severity === "warning" ? "flat" : "long";
+  const severityLabel = (severity) => severity === "critical" ? "严重" : severity === "warning" ? "警告" : "提示";
+  const delivery = {
+    pending: ["待投递", "flat"],
+    delivered: ["已投递", "long"],
+    failed: ["失败", "short"],
+  };
+  $("#alerts-table").replaceChildren(...rows.map((item) => {
+    const row = node("tr");
+    addCell(row, value(item.logical_slot), "number muted");
+    const severityCell = node("td"); severityCell.append(badge(severityLabel(item.severity), severityKind(item.severity))); row.append(severityCell);
+    addCell(row, item.source === "option" ? "期权信号" : value(item.source));
+    addCell(row, value(item.alert_type));
+    addCell(row, value(item.entity_code), "number");
+    addCell(row, value(item.message));
+    const status = delivery[item.delivery_status] || [value(item.delivery_status), "flat"];
+    const deliveryCell = node("td"); deliveryCell.append(badge(status[0], status[1])); row.append(deliveryCell);
+    addCell(row, integer(item.attempts), "number");
+    return row;
+  }));
+}
+
 function renderTasks() {
   const target = $("#task-grid");
   const rows = state.data.tasks.filter(matches);
@@ -517,7 +559,7 @@ function renderTasks() {
 
 function renderTables() {
   if (!state.data) return;
-  renderIntraday(); renderOptions(); renderOptionHistory(); renderMomentum(); renderSectors(); renderMomentumHistory(); renderTasks();
+  renderIntraday(); renderOptions(); renderOptionHistory(); renderMomentum(); renderSectors(); renderMomentumHistory(); renderAlerts(); renderTasks();
 }
 
 function renderAll() {

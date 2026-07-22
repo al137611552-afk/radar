@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from alert_store import load_alert_dashboard
 from momentum_history_store import (
     load_momentum_history,
     load_momentum_trajectory,
@@ -30,6 +31,20 @@ DATA_FILES = {
 SCHEDULER_DB = Path("output/scheduler/runs.db")
 MOMENTUM_HISTORY_DB = Path("output/history/momentum.db")
 OPTION_HISTORY_DB = Path("output/history/options.db")
+ALERT_DB = Path("output/alerts/alerts.db")
+_DASHBOARD_ALERT_FIELDS = (
+    "id",
+    "source",
+    "logical_slot",
+    "entity_code",
+    "alert_type",
+    "severity",
+    "title",
+    "message",
+    "delivery_status",
+    "attempts",
+    "created_at",
+)
 
 
 def _coerce(value: str):
@@ -188,6 +203,22 @@ def _read_tasks(path: Path) -> list[dict]:
     return result
 
 
+def _read_alerts(
+    path: Path, limit: int = 100
+) -> tuple[list[dict], dict[str, int], str | None]:
+    empty_counts = {"total": 0, "pending": 0, "delivered": 0, "failed": 0}
+    try:
+        rows, counts = load_alert_dashboard(path, limit=limit)
+        records = _dataframe_records(rows)
+        public_records = [
+            {field: record.get(field) for field in _DASHBOARD_ALERT_FIELDS}
+            for record in records
+        ]
+        return public_records, counts, None
+    except (OSError, sqlite3.Error, ValueError, KeyError, TypeError):
+        return [], empty_counts, "告警数据库损坏或暂时无法读取"
+
+
 def _file_status(
     root: Path,
     relative: Path,
@@ -228,6 +259,7 @@ def build_dashboard_payload(root: Path, now: datetime | None = None) -> dict:
     for name, relative in DATA_FILES.items():
         datasets[name], data_errors[name] = _load_csv(root / relative)
     tasks = _read_tasks(root / SCHEDULER_DB)
+    alerts, alert_counts, alert_error = _read_alerts(root / ALERT_DB)
     momentum_history = _dataframe_records(summarize_momentum_changes(
         load_momentum_history(root / MOMENTUM_HISTORY_DB)
     ))
@@ -240,9 +272,12 @@ def build_dashboard_payload(root: Path, now: datetime | None = None) -> dict:
         )
         for name, rows in datasets.items()
     }
+    files["alerts"] = _file_status(
+        root, ALERT_DB, alert_counts["total"], current, alert_error
+    )
     failed_tasks = sum(row.get("status") == "failed" for row in tasks)
-    total_rows = sum(len(rows) for rows in datasets.values())
-    has_data_errors = any(data_errors.values())
+    total_rows = sum(len(rows) for rows in datasets.values()) + alert_counts["total"]
+    has_data_errors = any(data_errors.values()) or alert_error is not None
     health = (
         "degraded" if failed_tasks or has_data_errors
         else ("healthy" if total_rows else "waiting")
@@ -257,10 +292,15 @@ def build_dashboard_payload(root: Path, now: datetime | None = None) -> dict:
             "sector_count": len(datasets["sectors"]),
             "momentum_history_count": len(momentum_history),
             "option_history_count": len(option_history),
+            "alert_count": alert_counts["total"],
+            "pending_alert_count": alert_counts["pending"],
+            "delivered_alert_count": alert_counts["delivered"],
+            "failed_alert_count": alert_counts["failed"],
             "failed_tasks": failed_tasks,
         },
         "files": files,
         "tasks": tasks,
+        "alerts": alerts,
         "momentum_history": momentum_history,
         "option_history": option_history,
         **datasets,
